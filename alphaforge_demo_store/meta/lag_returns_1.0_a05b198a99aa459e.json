@@ -1,0 +1,22 @@
+{
+  "template": "lag_returns",
+  "version": "1.0",
+  "realization_id": "lag_returns:1.0:a05b198a99aa459e",
+  "params": {
+    "lags": 5,
+    "source": "dummy",
+    "table": "market.ohlcv",
+    "price_col": "close"
+  },
+  "slice": {
+    "start": "2020-01-01 00:00:00",
+    "end": "2020-03-31 00:00:00",
+    "entities": [
+      "AAA",
+      "BBB"
+    ],
+    "asof": null,
+    "grid": "sessions:XNYS"
+  },
+  "upstream_snapshot": null
+}

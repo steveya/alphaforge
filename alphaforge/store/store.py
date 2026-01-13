@@ -1,0 +1,16 @@
+from typing import Protocol, Optional
+
+from ..features.frame import FeatureFrame, Artifact
+from ..features.realization import FitState
+
+
+class Store(Protocol):
+    def get_frame(self, realization_id: str) -> Optional[FeatureFrame]: ...
+
+    def put_frame(self, realization_id: str, frame: FeatureFrame) -> None: ...
+
+    def exists_frame(self, realization_id: str) -> bool: ...
+
+    def put_state(self, state: FitState, payload: bytes) -> Artifact: ...
+
+    def get_state(self, state_id: str) -> bytes: ...
