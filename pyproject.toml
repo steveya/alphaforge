@@ -7,7 +7,7 @@ name = "alphaforge"
 version = "0.0.1"
 description = "Point-in-time feature graphs for financial ML"
 requires-python = ">=3.10"
-dependencies = ["pandas", "numpy", "python-dateutil>=2.9.0.post0"]
+dependencies = ["pandas", "numpy", "python-dateutil>=2.9.0.post0", "fredapi"]
 
 [tool.setuptools]
 packages = ["alphaforge"]
