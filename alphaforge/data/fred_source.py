@@ -4,10 +4,12 @@ from alphaforge.data.source import DataSource
 from alphaforge.data.schema import TableSchema
 from alphaforge.data.query import Query
 
+
 class FREDDataSource(DataSource):
     """
     Data source for fetching data from FRED.
     """
+
     name: str = "fred"
 
     def __init__(self, api_key: str):
@@ -27,7 +29,7 @@ class FREDDataSource(DataSource):
             "fred_series": TableSchema(
                 name="fred_series",
                 required_columns=["value"],
-                canonical_columns=["value"],
+                canonical_columns=["value", "asof_utc"],
                 entity_column="series_id",
                 time_column="date",
                 native_freq="D",  # Default to daily, can be overridden
@@ -43,11 +45,14 @@ class FREDDataSource(DataSource):
             raise ValueError(f"Unknown table: {q.table}")
 
         if not q.entities:
-            raise ValueError("Please specify at least one series_id in the entities field.")
+            raise ValueError(
+                "Please specify at least one series_id in the entities field."
+            )
 
         all_series = []
+        asof_utc = q.asof if q.asof is not None else pd.Timestamp.now(tz="UTC")
         for series_id in q.entities:
-            realtime_start = q.asof.strftime('%Y-%m-%d') if q.asof else None
+            realtime_start = q.asof.strftime("%Y-%m-%d") if q.asof else None
             series = self._fred.get_series(
                 series_id=series_id,
                 observation_start=q.start,
@@ -57,6 +62,7 @@ class FREDDataSource(DataSource):
             )
             series = series.to_frame(name="value")
             series["series_id"] = series_id
+            series["asof_utc"] = asof_utc
             series.index.name = "date"
             all_series.append(series.reset_index())
 

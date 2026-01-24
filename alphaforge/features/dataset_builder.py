@@ -24,6 +24,7 @@ from ..time.grids import EventGrid as EventGridType  # reuse existing class
 
 logger = logging.getLogger(__name__)
 
+
 def _ts(x: pd.Timestamp) -> pd.Timestamp:
     return pd.Timestamp(x)
 
@@ -171,10 +172,16 @@ def build_dataset(
     """
     Build a dataset from feature + target requests.
     """
+    entities = list(spec.universe.entities)
+    if not entities:
+        raise ValueError(
+            "DatasetSpec.universe.entities is empty. Provide at least one entity_id."
+        )
+
     base_slice = SliceSpec(
         start=_ts(spec.time.start),
         end=_ts(spec.time.end),
-        entities=list(spec.universe.entities),
+        entities=entities,
         asof=spec.time.asof,
         grid=spec.time.grid,
     )
@@ -204,9 +211,23 @@ def build_dataset(
         # string (existing behavior)
         grid_idx = build_grid_utc(cal, spec.time.start, spec.time.end, grid_spec)
 
+    if len(grid_idx) == 0:
+        raise ValueError(
+            "No timestamps found for the requested time range/grid. "
+            f"calendar={spec.time.calendar}, grid={spec.time.grid}, "
+            f"start={spec.time.start}, end={spec.time.end}, entities={entities}"
+        )
+
     full_index = pd.MultiIndex.from_product(
-        [grid_idx, list(spec.universe.entities)], names=["ts_utc", "entity_id"]
+        [grid_idx, entities], names=["ts_utc", "entity_id"]
     )
+
+    if full_index.empty:
+        raise ValueError(
+            "Empty dataset index after combining timestamps and entities. "
+            f"calendar={spec.time.calendar}, grid={spec.time.grid}, "
+            f"start={spec.time.start}, end={spec.time.end}, entities={entities}"
+        )
 
     # 1) materialize features
     feature_frames: List[FeatureFrame] = []

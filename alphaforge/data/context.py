@@ -21,15 +21,30 @@ class DataContext:
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
         df = self.sources[source].fetch(q)
-        panel = PanelFrame.from_long(df)
 
-        # If the source provides a schema and it's a daily/business series,
-        # map the input date labels to session close UTC timestamps using calendar.
         try:
             schema = self.sources[source].schemas().get(q.table)
         except Exception:
             schema = None
 
+        if schema is not None:
+            panel = PanelFrame.from_long(
+                df,
+                time_col=schema.time_column,
+                entity_col=schema.entity_column,
+            )
+        else:
+            panel = PanelFrame.from_long(df)
+
+        # Ensure asof_utc column exists by default for PIT tracking
+        if "asof_utc" not in panel.df.columns:
+            if q.asof is not None:
+                panel.df["asof_utc"] = q.asof
+            else:
+                panel.df["asof_utc"] = pd.NaT
+
+        # If the source provides a schema and it's a daily/business series,
+        # map the input date labels to session close UTC timestamps using calendar.
         if schema is not None and schema.native_freq in ("B", "D"):
             # determine calendar: prefer q.grid like 'sessions:XNYS' else default 'XNYS'
             cal_name = "XNYS"
