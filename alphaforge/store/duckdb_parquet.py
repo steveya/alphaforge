@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -12,6 +12,7 @@ import pandas as pd
 
 from alphaforge.features.frame import FeatureFrame, Artifact
 from alphaforge.features.realization import FitState
+from alphaforge.pit.accessor import ensure_pit_table
 
 
 def _utc_now_iso() -> str:
@@ -39,6 +40,9 @@ class DuckDBParquetStore:
 
     root: str
     duckdb_path: Optional[str] = None
+    _cached_conn: Optional[duckdb.DuckDBPyConnection] = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self):
         self.root_path = Path(self.root).resolve()
@@ -55,31 +59,37 @@ class DuckDBParquetStore:
     def _conn(self):
         return duckdb.connect(self.duckdb_path)
 
+    def conn(self):
+        if self._cached_conn is None:
+            self._cached_conn = self._conn()
+        return self._cached_conn
+
     def _init_db(self):
-        with self._conn() as con:
-            con.execute(
-                """
-            CREATE TABLE IF NOT EXISTS frames (
-                realization_id VARCHAR PRIMARY KEY,
-                x_path VARCHAR NOT NULL,
-                catalog_path VARCHAR NOT NULL,
-                meta_path VARCHAR NOT NULL,
-                created_utc VARCHAR NOT NULL,
-                n_rows BIGINT,
-                n_cols BIGINT
-            );
+        con = self.conn()
+        con.execute(
             """
-            )
-            con.execute(
-                """
-            CREATE TABLE IF NOT EXISTS states (
-                state_id VARCHAR PRIMARY KEY,
-                payload_path VARCHAR NOT NULL,
-                meta_path VARCHAR NOT NULL,
-                created_utc VARCHAR NOT NULL
-            );
+        CREATE TABLE IF NOT EXISTS frames (
+            realization_id VARCHAR PRIMARY KEY,
+            x_path VARCHAR NOT NULL,
+            catalog_path VARCHAR NOT NULL,
+            meta_path VARCHAR NOT NULL,
+            created_utc VARCHAR NOT NULL,
+            n_rows BIGINT,
+            n_cols BIGINT
+        );
+        """
+        )
+        con.execute(
             """
-            )
+        CREATE TABLE IF NOT EXISTS states (
+            state_id VARCHAR PRIMARY KEY,
+            payload_path VARCHAR NOT NULL,
+            meta_path VARCHAR NOT NULL,
+            created_utc VARCHAR NOT NULL
+        );
+        """
+        )
+        ensure_pit_table(con)
 
     # ---------------------------
     # Frames
@@ -88,19 +98,19 @@ class DuckDBParquetStore:
         return self.root_path / "frames" / realization_id
 
     def exists_frame(self, realization_id: str) -> bool:
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT 1 FROM frames WHERE realization_id = ? LIMIT 1",
-                [realization_id],
-            ).fetchone()
+        con = self.conn()
+        row = con.execute(
+            "SELECT 1 FROM frames WHERE realization_id = ? LIMIT 1",
+            [realization_id],
+        ).fetchone()
         return row is not None
 
     def get_frame(self, realization_id: str) -> Optional[FeatureFrame]:
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT x_path, catalog_path, meta_path FROM frames WHERE realization_id = ?",
-                [realization_id],
-            ).fetchone()
+        con = self.conn()
+        row = con.execute(
+            "SELECT x_path, catalog_path, meta_path FROM frames WHERE realization_id = ?",
+            [realization_id],
+        ).fetchone()
 
         if row is None:
             return None
@@ -133,29 +143,29 @@ class DuckDBParquetStore:
             json.dump(frame.meta, f, ensure_ascii=False, indent=2, default=str)
 
         # Upsert index row
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO frames(realization_id, x_path, catalog_path, meta_path, created_utc, n_rows, n_cols)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(realization_id) DO UPDATE SET
-                    x_path=excluded.x_path,
-                    catalog_path=excluded.catalog_path,
-                    meta_path=excluded.meta_path,
-                    created_utc=excluded.created_utc,
-                    n_rows=excluded.n_rows,
-                    n_cols=excluded.n_cols
-            """,
-                [
-                    realization_id,
-                    str(x_path),
-                    str(catalog_path),
-                    str(meta_path),
-                    _utc_now_iso(),
-                    int(frame.X.shape[0]),
-                    int(frame.X.shape[1]),
-                ],
-            )
+        con = self.conn()
+        con.execute(
+            """
+            INSERT INTO frames(realization_id, x_path, catalog_path, meta_path, created_utc, n_rows, n_cols)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(realization_id) DO UPDATE SET
+                x_path=excluded.x_path,
+                catalog_path=excluded.catalog_path,
+                meta_path=excluded.meta_path,
+                created_utc=excluded.created_utc,
+                n_rows=excluded.n_rows,
+                n_cols=excluded.n_cols
+        """,
+            [
+                realization_id,
+                str(x_path),
+                str(catalog_path),
+                str(meta_path),
+                _utc_now_iso(),
+                int(frame.X.shape[0]),
+                int(frame.X.shape[1]),
+            ],
+        )
 
     # ---------------------------
     # Fit states / artifacts
@@ -174,18 +184,18 @@ class DuckDBParquetStore:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(state.meta, f, ensure_ascii=False, indent=2, default=str)
 
-        with self._conn() as con:
-            con.execute(
-                """
-                INSERT INTO states(state_id, payload_path, meta_path, created_utc)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(state_id) DO UPDATE SET
-                    payload_path=excluded.payload_path,
-                    meta_path=excluded.meta_path,
-                    created_utc=excluded.created_utc
-            """,
-                [state.state_id, str(payload_path), str(meta_path), _utc_now_iso()],
-            )
+        con = self.conn()
+        con.execute(
+            """
+            INSERT INTO states(state_id, payload_path, meta_path, created_utc)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(state_id) DO UPDATE SET
+                payload_path=excluded.payload_path,
+                meta_path=excluded.meta_path,
+                created_utc=excluded.created_utc
+        """,
+            [state.state_id, str(payload_path), str(meta_path), _utc_now_iso()],
+        )
 
         return Artifact(
             artifact_id=state.state_id,
@@ -195,11 +205,11 @@ class DuckDBParquetStore:
         )
 
     def get_state(self, state_id: str) -> bytes:
-        with self._conn() as con:
-            row = con.execute(
-                "SELECT payload_path FROM states WHERE state_id = ?",
-                [state_id],
-            ).fetchone()
+        con = self.conn()
+        row = con.execute(
+            "SELECT payload_path FROM states WHERE state_id = ?",
+            [state_id],
+        ).fetchone()
         if row is None:
             raise KeyError(f"FitState not found: {state_id}")
         return Path(row[0]).read_bytes()

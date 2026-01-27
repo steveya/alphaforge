@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
 import pandas as pd
@@ -9,15 +9,24 @@ from .panel import PanelFrame
 from .universe import Universe, EntityMetadata
 from ..time.calendar import TradingCalendar
 from ..store.store import Store
+from ..store.duckdb_parquet import DuckDBParquetStore
+from ..pit.accessor import PITAccessor
 
 
 @dataclass
 class DataContext:
+    """Runtime wiring for data sources, calendars, and optional PIT access."""
+
     sources: Mapping[str, DataSource]
     calendars: Mapping[str, TradingCalendar]
     store: Store
     universe: Optional[Universe] = None
     entity_meta: Optional[EntityMetadata] = None
+    pit: Optional[PITAccessor] = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.store, DuckDBParquetStore):
+            self.pit = PITAccessor(self.store.conn())
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
         df = self.sources[source].fetch(q)
