@@ -199,6 +199,10 @@ The `examples/` directory contains:
 - `run_mvp_demo.py`: feature materialization and joins (pre-dataset-builder)
 - `features_lag_returns.py`, `features_macro_carry.py`, `dummy_source.py`: building blocks used above
 
+## Point-in-Time (PIT) data
+
+Alphaforge supports revised macro series via a canonical Point-in-Time (PIT) table with snapshot and revision timeline views. See `docs/pit.md` for schema details, timezone rules, and usage examples.
+
 ## Integrations
 
 The [volatility-forecast](https://github.com/steveya/volatility-forecast) project demonstrates a domain-specific package built on Alphaforge. It defines feature families and targets (e.g., lagged returns, next-day squared return) and uses the scalable `DatasetSpec` via a convenience `VolDatasetSpec` wrapper in its pipeline.

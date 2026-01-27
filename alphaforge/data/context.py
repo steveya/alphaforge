@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
 import pandas as pd
@@ -9,6 +9,7 @@ from .panel import PanelFrame
 from .universe import Universe, EntityMetadata
 from ..time.calendar import TradingCalendar
 from ..store.store import Store
+from ..pit.accessor import PITAccessor
 
 
 @dataclass
@@ -18,6 +19,11 @@ class DataContext:
     store: Store
     universe: Optional[Universe] = None
     entity_meta: Optional[EntityMetadata] = None
+    pit: Optional[PITAccessor] = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        if self.store is not None and hasattr(self.store, "_conn"):
+            self.pit = PITAccessor(self.store._conn())
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
         df = self.sources[source].fetch(q)

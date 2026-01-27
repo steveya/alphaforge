@@ -16,6 +16,7 @@ from .features.realization import FeatureRealization, FitState
 from .store.cache import MaterializationPolicy
 from .store.duckdb_parquet import DuckDBParquetStore
 from .features.ops import materialize, join_feature_frames
+from .pit.accessor import PITAccessor
 
 __all__ = [
     "DataContext",
@@ -44,4 +45,5 @@ __all__ = [
     "materialize",
     "DuckDBParquetStore",
     "join_feature_frames",
+    "PITAccessor",
 ]
