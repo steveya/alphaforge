@@ -26,7 +26,7 @@ class DataContext:
 
     def __post_init__(self) -> None:
         if isinstance(self.store, DuckDBParquetStore):
-            self.pit = PITAccessor(self.store._conn())
+            self.pit = PITAccessor(self.store.conn())
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
         df = self.sources[source].fetch(q)

@@ -12,6 +12,7 @@ import pandas as pd
 
 from alphaforge.features.frame import FeatureFrame, Artifact
 from alphaforge.features.realization import FitState
+from alphaforge.pit.accessor import ensure_pit_table
 
 
 def _utc_now_iso() -> str:
@@ -55,6 +56,9 @@ class DuckDBParquetStore:
     def _conn(self):
         return duckdb.connect(self.duckdb_path)
 
+    def conn(self):
+        return self._conn()
+
     def _init_db(self):
         with self._conn() as con:
             con.execute(
@@ -80,6 +84,7 @@ class DuckDBParquetStore:
             );
             """
             )
+            ensure_pit_table(con)
 
     # ---------------------------
     # Frames

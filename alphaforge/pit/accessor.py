@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, Sequence
+from typing import Literal, Sequence
 
+import duckdb
 import pandas as pd
 
 _PIT_TABLE = "pit_observations"
@@ -17,21 +18,7 @@ def _ts_utc(value: pd.Timestamp | str | None) -> pd.Timestamp | None:
     return ts.tz_convert("UTC")
 
 
-class PITResult(Protocol):
-    def fetch_df(self) -> pd.DataFrame: ...
-
-
-class PITConnection(Protocol):
-    def execute(
-        self, query: str, params: Sequence[object] | None = None
-    ) -> PITResult: ...
-
-    def register(self, view_name: str, df: pd.DataFrame) -> None: ...
-
-    def unregister(self, view_name: str) -> None: ...
-
-
-def ensure_pit_table(conn: PITConnection) -> None:
+def ensure_pit_table(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {_PIT_TABLE} (
@@ -43,14 +30,9 @@ def ensure_pit_table(conn: PITConnection) -> None:
             revision_id TEXT,
             source TEXT,
             meta_json TEXT,
-            ingested_utc TIMESTAMP NOT NULL DEFAULT now()
+            ingested_utc TIMESTAMP NOT NULL DEFAULT now(),
+            UNIQUE(series_key, obs_date, asof_utc)
         );
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE UNIQUE INDEX IF NOT EXISTS pit_unique_key
-        ON {_PIT_TABLE}(series_key, obs_date, asof_utc);
         """
     )
     conn.execute(
@@ -77,10 +59,7 @@ def _normalize_datetime_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.
 
 @dataclass
 class PITAccessor:
-    conn: PITConnection
-
-    def __post_init__(self) -> None:
-        ensure_pit_table(self.conn)
+    conn: duckdb.DuckDBPyConnection
 
     def upsert_pit_observations(self, df: pd.DataFrame) -> None:
         required = {"series_key", "obs_date", "asof_utc", "value"}
@@ -168,7 +147,7 @@ class PITAccessor:
             WHERE rn = 1
             ORDER BY obs_date
         """
-        df = self.conn.execute(query, params).fetch_df()
+        df = self.conn.execute(query, params).fetchdf()
         if df.empty:
             return pd.Series(dtype="float64", name=series_key)
         series = pd.Series(
@@ -206,7 +185,7 @@ class PITAccessor:
             WHERE {where_clause}
             ORDER BY asof_utc ASC
         """
-        df = self.conn.execute(query, params).fetch_df()
+        df = self.conn.execute(query, params).fetchdf()
         if df.empty:
             return pd.Series(dtype="float64", name=series_key)
         series = pd.Series(
