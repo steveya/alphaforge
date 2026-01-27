@@ -6,6 +6,8 @@ from typing import Literal, Sequence
 import duckdb
 import pandas as pd
 
+from alphaforge.time.ref_period import RefPeriod, RefFreq
+
 _PIT_TABLE = "pit_observations"
 
 
@@ -198,3 +200,53 @@ class PITAccessor:
         )
         series.index.name = "asof_utc"
         return series
+
+    def get_revision_timeline_ref(
+        self,
+        series_key: str,
+        ref: str | RefPeriod,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        freq: RefFreq | None = None,
+    ) -> pd.Series:
+        """Resolve reference period to obs_date and return revision timeline."""
+        ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
+        if freq is not None and freq != ref_period.freq:
+            raise ValueError("Reference period frequency does not match requested freq.")
+        obs_date = ref_period.end_obs_date()
+        return self.get_revision_timeline(
+            series_key, obs_date, start_asof=start_asof, end_asof=end_asof
+        )
+
+    def get_snapshot_ref(
+        self,
+        series_key: str,
+        asof: pd.Timestamp,
+        start_ref: str | RefPeriod | None = None,
+        end_ref: str | RefPeriod | None = None,
+        *,
+        freq: RefFreq | None = None,
+    ) -> pd.Series:
+        """
+        Snapshot query using reference period keys for start/end obs_date bounds.
+
+        start_ref/end_ref map to the end timestamp of the reference period.
+        """
+
+        def _resolve(ref_value: str | RefPeriod | None) -> pd.Timestamp | None:
+            if ref_value is None:
+                return None
+            if isinstance(ref_value, RefPeriod):
+                ref_period = ref_value
+            else:
+                ref_period = RefPeriod.parse(ref_value)
+            if freq is not None and ref_period.freq != freq:
+                raise ValueError(
+                    "Reference period frequency does not match requested freq."
+                )
+            return ref_period.end_obs_date()
+
+        start_ts = _resolve(start_ref)
+        end_ts = _resolve(end_ref)
+        return self.get_snapshot(series_key, asof, start=start_ts, end=end_ts)

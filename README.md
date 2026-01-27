@@ -201,7 +201,7 @@ The `examples/` directory contains:
 
 ## Point-in-Time (PIT) data
 
-Alphaforge supports revised macro series via a canonical Point-in-Time (PIT) table with snapshot and revision timeline views. See `docs/pit.md` for schema details, timezone rules, and usage examples.
+Alphaforge supports revised macro series via a canonical Point-in-Time (PIT) table with snapshot and revision timeline views, including reference period keys for ref-based queries. See `docs/pit.md` for schema details, timezone rules, and usage examples.
 
 ## Integrations
 
