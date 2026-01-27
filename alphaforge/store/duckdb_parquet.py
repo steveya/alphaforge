@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -40,6 +40,9 @@ class DuckDBParquetStore:
 
     root: str
     duckdb_path: Optional[str] = None
+    _cached_conn: Optional[duckdb.DuckDBPyConnection] = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self):
         self.root_path = Path(self.root).resolve()
@@ -57,7 +60,9 @@ class DuckDBParquetStore:
         return duckdb.connect(self.duckdb_path)
 
     def conn(self):
-        return self._conn()
+        if self._cached_conn is None:
+            self._cached_conn = self._conn()
+        return self._cached_conn
 
     def _init_db(self):
         with self._conn() as con:
