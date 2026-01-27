@@ -61,6 +61,9 @@ def _normalize_datetime_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.
 class PITAccessor:
     conn: duckdb.DuckDBPyConnection
 
+    def __post_init__(self) -> None:
+        ensure_pit_table(self.conn)
+
     def upsert_pit_observations(self, df: pd.DataFrame) -> None:
         required = {"series_key", "obs_date", "asof_utc", "value"}
         missing = required - set(df.columns)

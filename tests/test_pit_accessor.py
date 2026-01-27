@@ -6,7 +6,7 @@ from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 
 def _make_accessor(tmp_path) -> PITAccessor:
     store = DuckDBParquetStore(root=str(tmp_path))
-    return PITAccessor(store._conn())
+    return PITAccessor(store.conn())
 
 
 def _sample_df() -> pd.DataFrame:

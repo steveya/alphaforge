@@ -35,7 +35,7 @@ from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 from alphaforge.pit.accessor import PITAccessor
 
 store = DuckDBParquetStore(root="./store")
-pit = PITAccessor(store._conn())
+pit = PITAccessor(store.conn())
 
 df = pd.DataFrame(
     {
