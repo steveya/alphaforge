@@ -81,7 +81,7 @@ class PITAccessor:
         normalized["obs_date"] = pd.to_datetime(normalized["obs_date"], utc=True)
         normalized["asof_utc"] = pd.to_datetime(normalized["asof_utc"], utc=True)
         if "ingested_utc" not in normalized.columns:
-            normalized["ingested_utc"] = pd.Timestamp.utcnow().tz_convert("UTC")
+            normalized["ingested_utc"] = pd.Timestamp.now("UTC")
 
         columns = [
             "series_key",
