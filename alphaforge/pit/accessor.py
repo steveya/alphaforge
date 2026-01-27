@@ -78,8 +78,6 @@ class PITAccessor:
             df, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
         )
         normalized = normalized.copy()
-        normalized["obs_date"] = pd.to_datetime(normalized["obs_date"], utc=True)
-        normalized["asof_utc"] = pd.to_datetime(normalized["asof_utc"], utc=True)
         if "ingested_utc" not in normalized.columns:
             normalized["ingested_utc"] = pd.Timestamp.now("UTC")
 
