@@ -77,7 +77,6 @@ class PITAccessor:
         normalized = _normalize_datetime_columns(
             df, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
         )
-        normalized = normalized.copy()
         if "ingested_utc" not in normalized.columns:
             normalized["ingested_utc"] = pd.Timestamp.now("UTC")
 

@@ -90,6 +90,7 @@ def test_multiple_series_key_isolation(tmp_path):
             "obs_date": [pd.Timestamp("2024-12-31")],
             "asof_utc": [pd.Timestamp("2025-01-20", tz="UTC")],
             "value": [5.0],
+            "source": ["alfred"],
         }
     )
     pit.upsert_pit_observations(pd.concat([df, extra], ignore_index=True))
