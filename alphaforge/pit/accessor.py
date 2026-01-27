@@ -11,12 +11,37 @@ from alphaforge.time.ref_period import RefPeriod, RefFreq
 _PIT_TABLE = "pit_observations"
 
 
-def _ts_utc(value: pd.Timestamp | str | None) -> pd.Timestamp | None:
+def to_utc_naive(value):
+    """Convert datetimes to UTC-naive for DuckDB storage and predicates."""
     if value is None:
         return None
+    if isinstance(value, pd.Series):
+        ts = pd.to_datetime(value, utc=True)
+        return ts.dt.tz_convert("UTC").dt.tz_localize(None)
+    if isinstance(value, pd.Index):
+        ts = pd.to_datetime(value, utc=True)
+        return ts.tz_convert("UTC").tz_localize(None)
     ts = pd.Timestamp(value)
     if ts.tzinfo is None:
         ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.tz_localize(None)
+
+
+def to_utc_aware(value):
+    """Convert datetimes to UTC-aware for PIT accessor outputs."""
+    if value is None:
+        return None
+    if isinstance(value, pd.Series):
+        ts = pd.to_datetime(value)
+        return ts.dt.tz_localize("UTC") if ts.dt.tz is None else ts.dt.tz_convert("UTC")
+    if isinstance(value, pd.Index):
+        ts = pd.to_datetime(value)
+        return ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
     return ts.tz_convert("UTC")
 
 
@@ -51,11 +76,14 @@ def ensure_pit_table(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def _normalize_datetime_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.DataFrame:
+def _normalize_datetime_columns(
+    df: pd.DataFrame, columns: Sequence[str]
+) -> pd.DataFrame:
     out = df.copy()
     for col in columns:
         if col in out.columns:
-            out[col] = pd.to_datetime(out[col], utc=True)
+            # Normalize to naive UTC to avoid local-time shifts in DuckDB TIMESTAMP.
+            out[col] = to_utc_naive(out[col])
     return out
 
 
@@ -76,7 +104,7 @@ class PITAccessor:
             df, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
         )
         if "ingested_utc" not in normalized.columns:
-            normalized["ingested_utc"] = pd.Timestamp.now("UTC")
+            normalized["ingested_utc"] = to_utc_naive(pd.Timestamp.now("UTC"))
 
         columns = [
             "series_key",
@@ -122,9 +150,10 @@ class PITAccessor:
     ) -> pd.Series:
         if method != "latest_leq":
             raise ValueError(f"Unsupported snapshot method: {method}")
-        asof_ts = _ts_utc(asof)
-        start_ts = _ts_utc(start)
-        end_ts = _ts_utc(end)
+        # DuckDB stores TIMESTAMP without tz; pass UTC-naive parameters.
+        asof_ts = to_utc_naive(asof)
+        start_ts = to_utc_naive(start)
+        end_ts = to_utc_naive(end)
 
         filters = ["series_key = ?", "asof_utc <= ?"]
         params: list[object] = [series_key, asof_ts]
@@ -157,7 +186,7 @@ class PITAccessor:
             return pd.Series(dtype="float64", name=series_key)
         series = pd.Series(
             df["value"].to_numpy(),
-            index=pd.to_datetime(df["obs_date"], utc=True),
+            index=to_utc_aware(df["obs_date"]),
             name=series_key,
         )
         series.index.name = "obs_date"
@@ -170,9 +199,10 @@ class PITAccessor:
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
     ) -> pd.Series:
-        obs_ts = _ts_utc(obs_date)
-        start_ts = _ts_utc(start_asof)
-        end_ts = _ts_utc(end_asof)
+        # DuckDB stores TIMESTAMP without tz; pass UTC-naive parameters.
+        obs_ts = to_utc_naive(obs_date)
+        start_ts = to_utc_naive(start_asof)
+        end_ts = to_utc_naive(end_asof)
 
         filters = ["series_key = ?", "obs_date = ?"]
         params: list[object] = [series_key, obs_ts]
@@ -195,7 +225,7 @@ class PITAccessor:
             return pd.Series(dtype="float64", name=series_key)
         series = pd.Series(
             df["value"].to_numpy(),
-            index=pd.to_datetime(df["asof_utc"], utc=True),
+            index=to_utc_aware(df["asof_utc"]),
             name=series_key,
         )
         series.index.name = "asof_utc"
@@ -213,7 +243,9 @@ class PITAccessor:
         """Resolve reference period to obs_date and return revision timeline."""
         ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
         if freq is not None and freq != ref_period.freq:
-            raise ValueError("Reference period frequency does not match requested freq.")
+            raise ValueError(
+                "Reference period frequency does not match requested freq."
+            )
         obs_date = ref_period.end_obs_date()
         return self.get_revision_timeline(
             series_key, obs_date, start_asof=start_asof, end_asof=end_asof
