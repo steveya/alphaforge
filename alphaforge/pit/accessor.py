@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal, Protocol, Sequence
 
 import pandas as pd
 
@@ -17,7 +17,15 @@ def _ts_utc(value: pd.Timestamp | str | None) -> pd.Timestamp | None:
     return ts.tz_convert("UTC")
 
 
-def ensure_pit_table(conn) -> None:
+class PITConnection(Protocol):
+    def execute(self, query: str, params: Sequence[object] | None = None): ...
+
+    def register(self, view_name: str, df: pd.DataFrame) -> None: ...
+
+    def unregister(self, view_name: str) -> None: ...
+
+
+def ensure_pit_table(conn: PITConnection) -> None:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {_PIT_TABLE} (
@@ -63,7 +71,7 @@ def _normalize_datetime_columns(df: pd.DataFrame, columns: Sequence[str]) -> pd.
 
 @dataclass
 class PITAccessor:
-    conn: object
+    conn: PITConnection
 
     def __post_init__(self) -> None:
         ensure_pit_table(self.conn)
@@ -97,20 +105,22 @@ class PITAccessor:
         normalized = normalized[columns]
 
         self.conn.register("pit_incoming", normalized)
-        self.conn.execute(
-            f"""
-            INSERT INTO {_PIT_TABLE} ({", ".join(columns)})
-            SELECT {", ".join(columns)} FROM pit_incoming
-            ON CONFLICT(series_key, obs_date, asof_utc) DO UPDATE SET
-                value=excluded.value,
-                release_time_utc=excluded.release_time_utc,
-                revision_id=excluded.revision_id,
-                source=excluded.source,
-                meta_json=excluded.meta_json,
-                ingested_utc=excluded.ingested_utc;
-            """
-        )
-        self.conn.unregister("pit_incoming")
+        try:
+            self.conn.execute(
+                f"""
+                INSERT INTO {_PIT_TABLE} ({", ".join(columns)})
+                SELECT {", ".join(columns)} FROM pit_incoming
+                ON CONFLICT(series_key, obs_date, asof_utc) DO UPDATE SET
+                    value=excluded.value,
+                    release_time_utc=excluded.release_time_utc,
+                    revision_id=excluded.revision_id,
+                    source=excluded.source,
+                    meta_json=excluded.meta_json,
+                    ingested_utc=excluded.ingested_utc;
+                """
+            )
+        finally:
+            self.conn.unregister("pit_incoming")
 
     def get_snapshot(
         self,

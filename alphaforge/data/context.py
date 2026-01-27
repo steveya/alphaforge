@@ -9,6 +9,7 @@ from .panel import PanelFrame
 from .universe import Universe, EntityMetadata
 from ..time.calendar import TradingCalendar
 from ..store.store import Store
+from ..store.duckdb_parquet import DuckDBParquetStore
 from ..pit.accessor import PITAccessor
 
 
@@ -22,7 +23,7 @@ class DataContext:
     pit: Optional[PITAccessor] = field(init=False, default=None)
 
     def __post_init__(self) -> None:
-        if self.store is not None and hasattr(self.store, "_conn"):
+        if isinstance(self.store, DuckDBParquetStore):
             self.pit = PITAccessor(self.store._conn())
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
