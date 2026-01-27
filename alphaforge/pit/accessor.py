@@ -17,8 +17,14 @@ def _ts_utc(value: pd.Timestamp | str | None) -> pd.Timestamp | None:
     return ts.tz_convert("UTC")
 
 
+class PITResult(Protocol):
+    def fetch_df(self) -> pd.DataFrame: ...
+
+
 class PITConnection(Protocol):
-    def execute(self, query: str, params: Sequence[object] | None = None): ...
+    def execute(
+        self, query: str, params: Sequence[object] | None = None
+    ) -> PITResult: ...
 
     def register(self, view_name: str, df: pd.DataFrame) -> None: ...
 

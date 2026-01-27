@@ -15,6 +15,8 @@ from ..pit.accessor import PITAccessor
 
 @dataclass
 class DataContext:
+    """Runtime wiring for data sources, calendars, and optional PIT access."""
+
     sources: Mapping[str, DataSource]
     calendars: Mapping[str, TradingCalendar]
     store: Store
