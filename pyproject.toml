@@ -40,6 +40,16 @@ Issues = "https://github.com/steveya/alphaforge/issues"
 [tool.setuptools]
 include-package-data = true
 exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
+packages = [
+  "alphaforge",
+  "alphaforge.data",
+  "alphaforge.time",
+  "alphaforge.store",
+  "alphaforge.pit",
+  "alphaforge.features",
+  "alphaforge.splits",
+  "alphaforge.diagnostics",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
