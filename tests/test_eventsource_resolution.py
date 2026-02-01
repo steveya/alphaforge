@@ -1,7 +1,6 @@
 import pandas as pd
-import pytest
 
-from alphaforge.time.events import SessionCloseEvents, FixedIntervalEvents
+from alphaforge.time.events import FixedIntervalEvents, SessionCloseEvents
 
 
 class DummyCtx:

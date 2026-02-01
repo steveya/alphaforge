@@ -1,8 +1,10 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
-from alphaforge.store.local_parquet import LocalParquetStore
+
+import numpy as np
+import pandas as pd
+
 from alphaforge.features.frame import FeatureFrame
+from alphaforge.store.local_parquet import LocalParquetStore
 
 
 def test_local_store_roundtrip(tmp_path: Path):

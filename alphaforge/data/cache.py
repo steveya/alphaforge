@@ -52,7 +52,7 @@ class DuckDBCacheBackend:
 
     def __post_init__(self) -> None:
         try:
-            import duckdb  # type: ignore
+            import duckdb
         except Exception as exc:  # pragma: no cover - optional dependency
             raise ImportError("duckdb is required for DuckDBCacheBackend") from exc
         self._duckdb = duckdb

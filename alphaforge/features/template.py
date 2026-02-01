@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence, Protocol, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol, Sequence, Tuple
+
 import pandas as pd
 
 from ..data.query import Query

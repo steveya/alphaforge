@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Literal
+from typing import Literal, Optional
+
 import pandas as pd
 
-from ..data.panel import PanelFrame, TS, ENTITY
+from ..data.panel import ENTITY, TS, PanelFrame
 from ..data.schema import TableSchema
 from .grids import Grid
 

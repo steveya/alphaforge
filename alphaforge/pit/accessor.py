@@ -6,7 +6,7 @@ from typing import Literal, Sequence
 import duckdb
 import pandas as pd
 
-from alphaforge.time.ref_period import RefPeriod, RefFreq
+from alphaforge.time.ref_period import RefFreq, RefPeriod
 
 _PIT_TABLE = "pit_observations"
 

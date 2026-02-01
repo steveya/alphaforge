@@ -1,26 +1,23 @@
 # alphaforge/features/dataset_builder.py
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+import warnings
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import os
-import logging
 import pandas as pd
-import warnings
 
+from ..time.events import EventSource  # NEW
+from ..time.grids import EventGrid as EventGridType  # reuse existing class
 from .dataset_spec import (
     DatasetArtifact,
     DatasetSpec,
-    FeatureRequest,
     SliceOverride,
     TargetRequest,
 )
-from .target_template import TargetFrame, TargetTemplate
-from .template import SliceSpec
 from .frame import FeatureFrame
-from ..time.events import EventSource  # NEW
-from ..time.grids import EventGrid as EventGridType  # reuse existing class
+from .target_template import TargetFrame
+from .template import SliceSpec
 
 logger = logging.getLogger(__name__)
 

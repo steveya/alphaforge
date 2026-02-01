@@ -1,18 +1,19 @@
 import pandas as pd
 import pytest
+
+from alphaforge.data.context import DataContext
+from alphaforge.data.query import Query
 from alphaforge.features.dataset_builder import build_dataset
 from alphaforge.features.dataset_spec import (
     DatasetSpec,
-    UniverseSpec,
-    TimeSpec,
     FeatureRequest,
     TargetRequest,
+    TimeSpec,
+    UniverseSpec,
 )
-from alphaforge.features.template import SliceSpec
 from alphaforge.features.frame import FeatureFrame
+from alphaforge.features.template import SliceSpec
 from alphaforge.time.calendar import TradingCalendar
-from alphaforge.data.context import DataContext
-from alphaforge.data.query import Query
 
 
 class SimpleSource:
@@ -94,4 +95,4 @@ def test_build_dataset_warns_on_template_leakage():
     )
 
     with pytest.warns(UserWarning, match="returned .* rows with timestamps after asof"):
-        art = build_dataset(ctx, spec, persist=False)
+        build_dataset(ctx, spec, persist=False)

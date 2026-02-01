@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
-import re
 
 import pandas as pd
 from pandas.tseries.offsets import MonthEnd

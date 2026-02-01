@@ -1,5 +1,5 @@
 import pandas as pd
-import numpy as np
+
 from alphaforge.features.frame import FeatureFrame
 from alphaforge.features.ops import join_feature_frames
 

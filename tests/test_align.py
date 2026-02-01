@@ -1,7 +1,8 @@
 import pandas as pd
+
 from alphaforge.data.query import Query
+from alphaforge.time.align import AlignSpec, AvailabilityState, align_panel
 from alphaforge.time.grids import SessionGrid
-from alphaforge.time.align import AlignSpec, align_panel, AvailabilityState
 
 
 def test_align_structural_missingness_monthly(dummy_ctx):

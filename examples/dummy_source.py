@@ -1,8 +1,7 @@
 import pandas as pd
-import numpy as np
 
-from alphaforge.data.schema import TableSchema
 from alphaforge.data.query import Query
+from alphaforge.data.schema import TableSchema
 
 
 class DummySource:

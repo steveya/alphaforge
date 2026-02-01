@@ -201,6 +201,15 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local data and artifacts
+alphaforge_demo_store/
+*.duckdb
+*.parquet
+
+# Build outputs
+.coverage.*
+dist/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

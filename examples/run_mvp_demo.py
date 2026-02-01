@@ -1,15 +1,14 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from alphaforge.time.calendar import TradingCalendar
 from alphaforge.data.context import DataContext
-from alphaforge.store.local_parquet import LocalParquetStore
-from alphaforge.features.template import SliceSpec
+from alphaforge.features.ops import join_feature_frames, materialize
 from alphaforge.features.realization import FeatureRealization
-from alphaforge.store.cache import MaterializationPolicy
-from alphaforge.features.ops import materialize, join_feature_frames
+from alphaforge.features.template import SliceSpec
 from alphaforge.splits.splits import rolling_splits
-
+from alphaforge.store.cache import MaterializationPolicy
+from alphaforge.store.local_parquet import LocalParquetStore
+from alphaforge.time.calendar import TradingCalendar
 from examples.dummy_source import DummySource
 from examples.features_lag_returns import LagReturnsTemplate
 from examples.features_macro_carry import MacroCarryTemplate

@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-from .template import ParamSpec, SliceSpec
 from .frame import FeatureFrame
-from .ids import make_feature_id, group_path
+from .ids import group_path, make_feature_id
+from .template import ParamSpec, SliceSpec
 
 
 @dataclass

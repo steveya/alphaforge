@@ -1,16 +1,17 @@
 import pandas as pd
+
+from alphaforge.data.context import DataContext
 from alphaforge.features.dataset_builder import build_dataset
 from alphaforge.features.dataset_spec import (
     DatasetSpec,
-    UniverseSpec,
-    TimeSpec,
     FeatureRequest,
     TargetRequest,
+    TimeSpec,
+    UniverseSpec,
 )
 from alphaforge.features.frame import FeatureFrame
 from alphaforge.features.template import SliceSpec
 from alphaforge.time.calendar import TradingCalendar
-from alphaforge.data.context import DataContext
 
 
 class TinyIntradayTemplate:
@@ -94,7 +95,6 @@ def test_intraday_dataset_alignment_and_asof():
 
     art = build_dataset(ctx, spec, persist=False)
     X = art.X
-    y = art.y
 
     # grid should include at least 2 minutes
     grid = cal.trading_minutes_utc(spec.time.start, spec.time.end, freq="5min")

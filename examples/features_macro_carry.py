@@ -1,10 +1,11 @@
 import pandas as pd
+
 from alphaforge.data.query import Query
-from alphaforge.time.grids import SessionGrid
-from alphaforge.time.align import AlignSpec, align_panel
-from alphaforge.features.template import ParamSpec
 from alphaforge.features.frame import FeatureFrame
-from alphaforge.features.ids import make_feature_id, group_path
+from alphaforge.features.ids import group_path, make_feature_id
+from alphaforge.features.template import ParamSpec
+from alphaforge.time.align import AlignSpec, align_panel
+from alphaforge.time.grids import SessionGrid
 
 
 class MacroCarryTemplate:

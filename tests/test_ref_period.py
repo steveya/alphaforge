@@ -1,6 +1,6 @@
 import pandas as pd
 
-from alphaforge.time.ref_period import RefPeriod, RefFreq
+from alphaforge.time.ref_period import RefFreq, RefPeriod
 
 
 def test_refperiod_parsing_and_canonicalization():

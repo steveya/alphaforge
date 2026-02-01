@@ -3,14 +3,14 @@ from typing import Mapping, Optional
 
 import pandas as pd
 
-from .source import DataSource
-from .query import Query
-from .panel import PanelFrame
-from .universe import Universe, EntityMetadata
-from ..time.calendar import TradingCalendar
-from ..store.store import Store
-from ..store.duckdb_parquet import DuckDBParquetStore
 from ..pit.accessor import PITAccessor
+from ..store.duckdb_parquet import DuckDBParquetStore
+from ..store.store import Store
+from ..time.calendar import TradingCalendar
+from .panel import PanelFrame
+from .query import Query
+from .source import DataSource
+from .universe import EntityMetadata, Universe
 
 
 @dataclass
@@ -78,5 +78,5 @@ class DataContext:
         if q.asof is not None:
             panel = panel.slice(end=q.asof)
         if self.universe is not None:
-            panel = self.universe.restrict_panel(panel)  # type: ignore
+            panel = self.universe.restrict_panel(panel)
         return panel.ensure_sorted()

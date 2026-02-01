@@ -1,17 +1,81 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68,<77", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "alphaforge"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Point-in-time feature graphs for financial ML"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["pandas", "numpy", "python-dateutil>=2.9.0.post0", "fredapi"]
+license = { file = "LICENSE" }
+authors = [{ name = "steveya" }]
+dependencies = [
+    "duckdb>=0.9.2",
+    "numpy>=1.23",
+    "pandas>=2.0",
+    "python-dateutil>=2.9.0.post0",
+    "pyarrow>=14.0.1",
+    "fredapi>=0.5.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.0.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.7.0",
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+    "twine>=5.0.0",
+    "types-python-dateutil>=2.9.0.20240316",
+    "types-requests>=2.31.0.20240406",
+]
+
+[project.urls]
+Homepage = "https://github.com/steveya/alphaforge"
+Documentation = "https://github.com/steveya/alphaforge"
+Issues = "https://github.com/steveya/alphaforge/issues"
 
 [tool.setuptools]
-packages = ["alphaforge"]
+include-package-data = true
+exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alphaforge*"]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["alphaforge"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=alphaforge --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["alphaforge"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

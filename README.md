@@ -1,5 +1,9 @@
 # Alphaforge
 
+[![CI](https://github.com/steveya/alphaforge/actions/workflows/ci.yml/badge.svg)](https://github.com/steveya/alphaforge/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/alphaforge.svg)](https://pypi.org/project/alphaforge/)
+[![Python](https://img.shields.io/pypi/pyversions/alphaforge.svg)](https://pypi.org/project/alphaforge/)
+
 Composable feature engineering and dataset building for systematic research.
 
 Alphaforge provides a small set of primitives for:
@@ -12,12 +16,19 @@ This README focuses on the new scalable Dataset API: `DatasetSpec` and `build_da
 
 ## Installation
 
-Clone and install in editable mode:
+Install from PyPI:
+
+```
+pip install alphaforge
+```
+
+For development:
 
 ```
 git clone https://github.com/steveya/alphaforge
 cd alphaforge
-pip install -e .
+pip install -e ".[dev]"
+pre-commit install
 ```
 
 Optional: for the examples below you only need pandas/numpy which are standard dependencies.
@@ -44,19 +55,20 @@ import pandas as pd
 
 from alphaforge.time.calendar import TradingCalendar
 from alphaforge.data.context import DataContext
+from alphaforge.data.query import Query
 from alphaforge.store.local_parquet import LocalParquetStore
 
 from alphaforge.features.dataset_spec import (
-	DatasetSpec,
-	UniverseSpec,
-	TimeSpec,
-	FeatureRequest,
-	TargetRequest,
-	SliceOverride,
-	JoinPolicy,
-	MissingnessPolicy,
+DatasetSpec,
+UniverseSpec,
+TimeSpec,
+FeatureRequest,
+TargetRequest,
+SliceOverride,
+JoinPolicy,
+MissingnessPolicy,
 )
-from alphaforge.features.target_template import TargetFrame, TargetTemplate
+from alphaforge.features.target_template import TargetFrame
 from alphaforge.features.dataset_builder import build_dataset
 
 # Example pieces from the repo's examples/
@@ -74,18 +86,18 @@ entities = ["AAA", "BBB"]
 rng = np.random.default_rng(123)
 rows = []
 for e in entities:
-	px = 100 + np.cumsum(rng.normal(0, 1, size=len(dates)))
-	for d, p in zip(dates, px):
-		rows.append({"date": d, "entity_id": e, "close": float(p)})
+px = 100 + np.cumsum(rng.normal(0, 1, size=len(dates)))
+for d, p in zip(dates, px):
+rows.append({"date": d, "entity_id": e, "close": float(p)})
 ohlcv = pd.DataFrame(rows)
 
 # synthetic monthly macro
 macro = pd.DataFrame(
-	[
-		{"date": pd.Timestamp("2020-01-31"), "entity_id": "CPI", "value": 1.0},
-		{"date": pd.Timestamp("2020-02-29"), "entity_id": "CPI", "value": 2.0},
-		{"date": pd.Timestamp("2020-03-31"), "entity_id": "CPI", "value": 3.0},
-	]
+[
+{"date": pd.Timestamp("2020-01-31"), "entity_id": "CPI", "value": 1.0},
+{"date": pd.Timestamp("2020-02-29"), "entity_id": "CPI", "value": 2.0},
+{"date": pd.Timestamp("2020-03-31"), "entity_id": "CPI", "value": 3.0},
+]
 )
 
 src = DummySource(ohlcv_long=ohlcv, macro_long=macro)
@@ -95,44 +107,44 @@ ctx = DataContext(sources={"dummy": src}, calendars={"XNYS": cal}, store=store)
 
 # 2) Define features using FeatureRequest
 features = (
-	FeatureRequest(
-		template=LagReturnsTemplate(),
-		params={"lags": 5, "source": "dummy", "table": "market.ohlcv", "price_col": "close"},
-	),
-	FeatureRequest(
-		template=MacroCarryTemplate(),
-		params={"source": "dummy", "table": "macro.series", "value_col": "value", "method": "ffill"},
-	),
+FeatureRequest(
+template=LagReturnsTemplate(),
+params={"lags": 5, "source": "dummy", "table": "market.ohlcv", "price_col": "close"},
+),
+FeatureRequest(
+template=MacroCarryTemplate(),
+params={"source": "dummy", "table": "macro.series", "value_col": "value", "method": "ffill"},
+),
 )
 
 
 # 3) Define a simple TargetTemplate (next-day squared log return)
 class NextDaySqLogRetTarget:
-	name = "target_nextday_sqret"
-	version = "1.0"
-	param_space = {}
+name = "target_nextday_sqret"
+version = "1.0"
+param_space = {}
 
-	def fit(self, ctx, params, fit_slice):
-		return None
+def fit(self, ctx, params, fit_slice):
+return None
 
-	def transform(self, ctx, params, slice, state):
-		panel = ctx.fetch_panel(
-			"dummy",
-			# fetch just close from market.ohlcv
-			Query(
-				table="market.ohlcv",
-				columns=["close"],
-				start=slice.start,
-				end=slice.end,
-				entities=slice.entities,
-				asof=slice.asof,
-				grid=slice.grid,
-			),
-		)
-		px = panel.df["close"].astype(float)
-		logret = np.log(px).groupby(level="entity_id").diff()
-		y = (logret.groupby(level="entity_id").shift(-1) ** 2).rename("y")
-		return TargetFrame(y=y, meta={"definition": "(logret_{t+1})^2"})
+def transform(self, ctx, params, slice, state):
+panel = ctx.fetch_panel(
+"dummy",
+# fetch just close from market.ohlcv
+Query(
+table="market.ohlcv",
+columns=["close"],
+start=slice.start,
+end=slice.end,
+entities=slice.entities,
+asof=slice.asof,
+grid=slice.grid,
+),
+)
+px = panel.df["close"].astype(float)
+logret = np.log(px).groupby(level="entity_id").diff()
+y = (logret.groupby(level="entity_id").shift(-1) ** 2).rename("y")
+return TargetFrame(y=y, meta={"definition": "(logret_{t+1})^2"})
 
 
 target = TargetRequest(template=NextDaySqLogRetTarget(), params={}, horizon=1, name="y")
@@ -140,14 +152,14 @@ target = TargetRequest(template=NextDaySqLogRetTarget(), params={}, horizon=1, n
 
 # 4) Build DatasetSpec and materialize
 spec = DatasetSpec(
-	universe=UniverseSpec(entities=entities),
-	time=TimeSpec(start=pd.Timestamp("2020-01-01"), end=pd.Timestamp("2020-03-31"), calendar="XNYS", grid="B"),
-	features=list(features),
-	target=target,
-	join_policy=JoinPolicy(how="inner", sort_index=True),
-	missingness=MissingnessPolicy(final_row_policy="drop_if_any_nan"),
-	name="demo_dataset",
-	tags={"example": True},
+universe=UniverseSpec(entities=entities),
+time=TimeSpec(start=pd.Timestamp("2020-01-01"), end=pd.Timestamp("2020-03-31"), calendar="XNYS", grid="B"),
+features=list(features),
+target=target,
+join_policy=JoinPolicy(how="inner", sort_index=True),
+missingness=MissingnessPolicy(final_row_policy="drop_if_any_nan"),
+name="demo_dataset",
+tags={"example": True},
 )
 
 artifact = build_dataset(ctx, spec, persist=True)
@@ -160,9 +172,9 @@ That’s it. You can add arbitrarily many feature requests. Each request can ove
 
 ```python
 FeatureRequest(
-	template=LagReturnsTemplate(),
-	params={"lags": 20, "source": "dummy", "table": "market.ohlcv", "price_col": "close"},
-	slice_override=SliceOverride(lookback=pd.Timedelta(days=60)),
+template=LagReturnsTemplate(),
+params={"lags": 20, "source": "dummy", "table": "market.ohlcv", "price_col": "close"},
+slice_override=SliceOverride(lookback=pd.Timedelta(days=60)),
 )
 ```
 
@@ -203,9 +215,13 @@ The `examples/` directory contains:
 
 Alphaforge supports revised macro series via a canonical Point-in-Time (PIT) table with snapshot and revision timeline views, including reference period keys for ref-based queries. See `docs/pit.md` for schema details, timezone rules, and usage examples.
 
-## Integrations
+## Development
 
-The [volatility-forecast](https://github.com/steveya/volatility-forecast) project demonstrates a domain-specific package built on Alphaforge. It defines feature families and targets (e.g., lagged returns, next-day squared return) and uses the scalable `DatasetSpec` via a convenience `VolDatasetSpec` wrapper in its pipeline.
+- Run tests: `pytest`
+- Lint: `ruff check .`
+- Type check: `mypy alphaforge`
+- Build: `python -m build`
+- Release: tag `vX.Y.Z` and push, GitHub Actions will publish to PyPI.
 
 ## License
 

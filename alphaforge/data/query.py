@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import Optional, Sequence, Literal
-import pandas as pd
+from typing import Literal, Optional, Sequence
 
+import pandas as pd
 
 VintageMode = Literal["latest", "first", "specific"]
 

@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+
 import pandas as pd
+
+from .panel import PanelFrame
 
 
 @dataclass(frozen=True)
@@ -23,7 +26,7 @@ class Universe:
         row = self.membership.loc[date]
         return [c for c, v in row.items() if bool(v)]
 
-    def restrict_panel(self, panel: "object") -> "object":
+    def restrict_panel(self, panel: PanelFrame) -> PanelFrame:
         df = panel.df
         dates = df.index.get_level_values("ts_utc")
         ents = df.index.get_level_values("entity_id")
@@ -33,7 +36,7 @@ class Universe:
             if d not in cache:
                 cache[d] = set(self.entities_on(d))
             keep.append(e in cache[d])
-        return type(panel)(df.loc[keep])
+        return PanelFrame(df.loc[keep])
 
 
 @dataclass(frozen=True)
