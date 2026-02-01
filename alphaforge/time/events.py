@@ -36,8 +36,8 @@ def _ensure_utc(ts: pd.DatetimeIndex | pd.Timestamp) -> pd.DatetimeIndex:
 
 def _shift(ts: pd.DatetimeIndex, delay: pd.Timedelta) -> pd.DatetimeIndex:
     if delay == pd.Timedelta(0):
-        return pd.DatetimeIndex(ts).tz_convert("UTC").as_unit("us")
-    return (pd.DatetimeIndex(ts) + delay).tz_convert("UTC").as_unit("us")
+        return pd.DatetimeIndex(ts).tz_convert("UTC")
+    return (pd.DatetimeIndex(ts) + delay).tz_convert("UTC")
 
 
 @dataclass(frozen=True)
