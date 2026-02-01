@@ -24,7 +24,7 @@ class MultiDayTinyTemplate:
 
     def transform(self, ctx: DataContext, params, slice: SliceSpec, state):
         cal = ctx.calendars["XNYS"]
-        cal.trading_minutes_utc(slice.start, slice.end, freq="5min")
+        _ = cal.trading_minutes_utc(slice.start, slice.end, freq="5min")
         # emit the first minute of each session in the range
         sessions = cal.sessions(str(slice.start.date()), str(slice.end.date()))
         chosen = []

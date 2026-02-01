@@ -117,18 +117,12 @@ class DuckDBParquetStore:
         x_path, catalog_path, meta_path = row
         X = pd.read_parquet(x_path)
         if isinstance(X.index, pd.MultiIndex):
-            ts = pd.DatetimeIndex(X.index.get_level_values("ts_utc")).as_unit("us")
-            ts = pd.to_datetime(ts.astype(str), utc=True)
-            entities = X.index.get_level_values("entity_id")
-            ts_naive = ts.tz_convert(None)
-            if len(ts_naive) > 1:
-                inferred = pd.infer_freq(ts_naive)
+            ts = pd.DatetimeIndex(X.index.get_level_values("ts_utc"))
+            if ts.tz is None:
+                ts = ts.tz_localize("UTC")
             else:
-                inferred = None
-            if inferred:
-                ts = pd.date_range(
-                    start=ts_naive[0], end=ts_naive[-1], freq=inferred, tz="UTC"
-                )
+                ts = ts.tz_convert("UTC")
+            entities = X.index.get_level_values("entity_id")
             X.index = pd.MultiIndex.from_arrays(
                 [ts, entities], names=["ts_utc", "entity_id"]
             )

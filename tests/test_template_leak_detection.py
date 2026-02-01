@@ -95,4 +95,4 @@ def test_build_dataset_warns_on_template_leakage():
     )
 
     with pytest.warns(UserWarning, match="returned .* rows with timestamps after asof"):
-        build_dataset(ctx, spec, persist=False)
+        _ = build_dataset(ctx, spec, persist=False)
