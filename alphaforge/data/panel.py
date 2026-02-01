@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional, Sequence
+
 import pandas as pd
 
 # incoming column name for time is often 'date'; index level name will be 'ts_utc'

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +9,7 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-from alphaforge.features.frame import FeatureFrame, Artifact
+from alphaforge.features.frame import Artifact, FeatureFrame
 from alphaforge.features.realization import FitState
 from alphaforge.pit.accessor import ensure_pit_table
 
@@ -57,7 +56,7 @@ class DuckDBParquetStore:
     # DuckDB initialization
     # ---------------------------
     def _conn(self):
-        return duckdb.connect(self.duckdb_path)
+        return duckdb.connect(str(self.duckdb_path))
 
     def conn(self):
         if self._cached_conn is None:
@@ -117,6 +116,16 @@ class DuckDBParquetStore:
 
         x_path, catalog_path, meta_path = row
         X = pd.read_parquet(x_path)
+        if isinstance(X.index, pd.MultiIndex):
+            ts = pd.DatetimeIndex(X.index.get_level_values("ts_utc"))
+            if ts.tz is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            entities = X.index.get_level_values("entity_id")
+            X.index = pd.MultiIndex.from_arrays(
+                [ts, entities], names=["ts_utc", "entity_id"]
+            )
         catalog = pd.read_parquet(catalog_path)
 
         with open(meta_path, "r", encoding="utf-8") as f:

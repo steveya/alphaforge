@@ -2,8 +2,8 @@ import pandas as pd
 
 from alphaforge.pit.accessor import PITAccessor
 from alphaforge.pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
-from alphaforge.time.ref_period import RefPeriod
 from alphaforge.store.duckdb_parquet import DuckDBParquetStore
+from alphaforge.time.ref_period import RefPeriod
 
 
 def _make_accessor(tmp_path) -> PITAccessor:

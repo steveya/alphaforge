@@ -1,17 +1,18 @@
 import pandas as pd
+
+from alphaforge.data.context import DataContext
+from alphaforge.data.query import Query
 from alphaforge.features.dataset_builder import build_dataset
 from alphaforge.features.dataset_spec import (
     DatasetSpec,
-    UniverseSpec,
-    TimeSpec,
     FeatureRequest,
     TargetRequest,
+    TimeSpec,
+    UniverseSpec,
 )
-from alphaforge.features.template import SliceSpec
 from alphaforge.features.frame import FeatureFrame
+from alphaforge.features.template import SliceSpec
 from alphaforge.time.calendar import TradingCalendar
-from alphaforge.data.context import DataContext
-from alphaforge.data.query import Query
 
 
 class SimpleSource:

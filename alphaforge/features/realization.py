@@ -1,6 +1,7 @@
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-import json, hashlib
 
 from .template import SliceSpec
 

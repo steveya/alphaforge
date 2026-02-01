@@ -1,7 +1,8 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, List
-import pandas as pd
 import json  # added
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
 
 
 @dataclass

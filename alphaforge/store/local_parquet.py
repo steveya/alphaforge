@@ -1,11 +1,14 @@
-import os, json, pickle
+import json
+import os
+import pickle
 from dataclasses import dataclass
 from typing import Optional
+
 import pandas as pd
 
-from .store import Store
-from ..features.frame import FeatureFrame, Artifact
+from ..features.frame import Artifact, FeatureFrame
 from ..features.realization import FitState
+from .store import Store
 
 
 def _ensure(p: str) -> None:

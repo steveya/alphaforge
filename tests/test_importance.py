@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 from alphaforge.diagnostics.importance import (
     attach_importance,

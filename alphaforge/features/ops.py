@@ -1,13 +1,14 @@
-from typing import Optional, List
 import pickle
+from typing import List, Optional
+
 import pandas as pd
 
 from ..data.context import DataContext
 from ..store.cache import MaterializationPolicy
-from .template import FeatureTemplate, SliceSpec
-from .realization import FeatureRealization
-from .frame import FeatureFrame
 from .dag import LineageGraph
+from .frame import FeatureFrame
+from .realization import FeatureRealization
+from .template import FeatureTemplate, SliceSpec
 
 
 def materialize(
@@ -40,7 +41,7 @@ def materialize(
     # stateful fit (optional)
     state = None
     try:
-        st = template.fit(ctx, realization.params, fit_slice or realization.slice)  # type: ignore
+        st = template.fit(ctx, realization.params, fit_slice or realization.slice)
     except Exception:
         st = None
 
@@ -55,7 +56,7 @@ def materialize(
             lineage.link(rid, art.artifact_id)
         state = st
 
-    frame = template.transform(ctx, realization.params, realization.slice, state)  # type: ignore
+    frame = template.transform(ctx, realization.params, realization.slice, state)
     frame.meta = {
         **frame.meta,
         "realization_id": rid,

@@ -1,11 +1,11 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from alphaforge.features.template import ParamSpec, SliceSpec
-from alphaforge.features.realization import FeatureRealization
-from alphaforge.features.ops import materialize
-from alphaforge.store.cache import MaterializationPolicy
 from alphaforge.features.frame import FeatureFrame
+from alphaforge.features.ops import materialize
+from alphaforge.features.realization import FeatureRealization
+from alphaforge.features.template import ParamSpec, SliceSpec
+from alphaforge.store.cache import MaterializationPolicy
 
 
 class CallCountingTemplate:

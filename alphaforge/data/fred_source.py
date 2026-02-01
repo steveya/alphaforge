@@ -1,8 +1,10 @@
 from typing import Dict
+
 import pandas as pd
-from alphaforge.data.source import DataSource
-from alphaforge.data.schema import TableSchema
+
 from alphaforge.data.query import Query
+from alphaforge.data.schema import TableSchema
+from alphaforge.data.source import DataSource
 
 
 class FREDDataSource(DataSource):

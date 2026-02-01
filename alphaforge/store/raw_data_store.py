@@ -66,7 +66,7 @@ class DuckDBRawDataStore:
     def _conn(self):
         import duckdb
 
-        return duckdb.connect(self.duckdb_path)
+        return duckdb.connect(str(self.duckdb_path))
 
     def _init_db(self) -> None:
         with self._conn() as con:

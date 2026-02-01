@@ -1,6 +1,7 @@
 import pandas as pd
-from alphaforge.data.panel import PanelFrame
+
 from alphaforge.data.context import DataContext
+from alphaforge.data.panel import PanelFrame
 from alphaforge.data.query import Query
 
 

@@ -1,4 +1,5 @@
 from typing import Protocol
+
 import pandas as pd
 
 from .query import Query

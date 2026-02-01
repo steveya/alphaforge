@@ -1,16 +1,17 @@
 import pandas as pd
+
+from alphaforge.data.context import DataContext
 from alphaforge.features.dataset_builder import build_dataset
 from alphaforge.features.dataset_spec import (
     DatasetSpec,
-    UniverseSpec,
-    TimeSpec,
     FeatureRequest,
     TargetRequest,
+    TimeSpec,
+    UniverseSpec,
 )
-from alphaforge.features.template import SliceSpec
 from alphaforge.features.frame import FeatureFrame
+from alphaforge.features.template import SliceSpec
 from alphaforge.time.calendar import TradingCalendar
-from alphaforge.data.context import DataContext
 
 
 class MultiDayTinyTemplate:
@@ -23,7 +24,7 @@ class MultiDayTinyTemplate:
 
     def transform(self, ctx: DataContext, params, slice: SliceSpec, state):
         cal = ctx.calendars["XNYS"]
-        minutes = cal.trading_minutes_utc(slice.start, slice.end, freq="5min")
+        _ = cal.trading_minutes_utc(slice.start, slice.end, freq="5min")
         # emit the first minute of each session in the range
         sessions = cal.sessions(str(slice.start.date()), str(slice.end.date()))
         chosen = []

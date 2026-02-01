@@ -1,6 +1,6 @@
-from typing import Protocol, Optional
+from typing import Optional, Protocol
 
-from ..features.frame import FeatureFrame, Artifact
+from ..features.frame import Artifact, FeatureFrame
 from ..features.realization import FitState
 
 
