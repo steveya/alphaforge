@@ -51,10 +51,6 @@ packages = [
   "alphaforge.diagnostics",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["alphaforge*"]
-
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"
 local_scheme = "no-local-version"
