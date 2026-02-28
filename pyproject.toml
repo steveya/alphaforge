@@ -51,8 +51,6 @@ exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
 packages = [
   "alphaforge",
   "alphaforge.data",
-  "alphaforge.data.registries",
-  "alphaforge.data.public_web",
   "alphaforge.time",
   "alphaforge.store",
   "alphaforge.pit",

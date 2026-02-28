@@ -34,12 +34,6 @@ Run the local end-to-end MVP demo:
 python examples/run_mvp_demo.py
 ```
 
-Run the public-web loader demo:
-
-```bash
-python examples/public_web_macro_derivs.py
-```
-
 ## Core Concepts
 
 - `DataContext`: runtime wiring for sources, calendars, and store
