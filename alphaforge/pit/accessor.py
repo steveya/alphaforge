@@ -3,23 +3,34 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 import duckdb
 import pandas as pd
 
 from alphaforge.time.ref_period import RefFreq, RefPeriod
 
+from .exceptions import (
+    PITCausalityError,
+    PITContractError,
+    PITExperimentalFeatureError,
+    PITUnsupportedOperationError,
+    PITValidationError,
+)
 from .guards import ReleaseLagPolicy, effective_asof
 from .transforms import (
+    EngineMismatchPolicy,
+    PITEngineResolution,
     PITTransformResult,
     PITTransformSpec,
     apply_obs_path_transform,
     apply_revision_path_transform,
+    coerce_transform_spec,
     resolve_engine,
     serialize_params_for_lineage,
     validate_transform_spec,
 )
+from .validation import validate_pit_observations
 
 _PIT_TABLE = "pit_observations"
 _PIT_TRANSFORMS_TABLE = "pit_transforms"
@@ -149,11 +160,15 @@ class PITAccessor:
     def __post_init__(self) -> None:
         ensure_pit_table(self.conn)
 
-    def upsert_pit_observations(self, df: pd.DataFrame) -> None:
-        required = {"series_key", "obs_date", "asof_utc", "value"}
-        missing = required - set(df.columns)
-        if missing:
-            raise ValueError(f"Missing required columns: {sorted(missing)}")
+    def upsert_pit_observations(self, df: pd.DataFrame, *, strict: bool = True) -> None:
+        report = validate_pit_observations(df)
+        if report.missing_required_columns:
+            raise PITContractError(
+                f"Missing required columns: {sorted(report.missing_required_columns)}"
+            )
+
+        if strict and report.has_errors:
+            raise PITValidationError(report.to_error_message())
 
         normalized = _normalize_datetime_columns(
             df, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
@@ -204,8 +219,8 @@ class PITAccessor:
         method: Literal["latest_leq"] = "latest_leq",
     ) -> pd.Series:
         if method != "latest_leq":
-            raise ValueError(f"Unsupported snapshot method: {method}")
-        # DuckDB stores TIMESTAMP without tz; pass UTC-naive parameters.
+            raise PITUnsupportedOperationError(f"Unsupported snapshot method: {method}")
+
         asof_ts = to_utc_naive(asof)
         start_ts = to_utc_naive(start)
         end_ts = to_utc_naive(end)
@@ -239,6 +254,7 @@ class PITAccessor:
         df = self.conn.execute(query, params).fetchdf()
         if df.empty:
             return pd.Series(dtype="float64", name=series_key)
+
         series = pd.Series(
             df["value"].to_numpy(),
             index=to_utc_aware(df["obs_date"]),
@@ -254,7 +270,6 @@ class PITAccessor:
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
     ) -> pd.Series:
-        # DuckDB stores TIMESTAMP without tz; pass UTC-naive parameters.
         obs_ts = to_utc_naive(obs_date)
         start_ts = to_utc_naive(start_asof)
         end_ts = to_utc_naive(end_asof)
@@ -278,6 +293,7 @@ class PITAccessor:
         df = self.conn.execute(query, params).fetchdf()
         if df.empty:
             return pd.Series(dtype="float64", name=series_key)
+
         series = pd.Series(
             df["value"].to_numpy(),
             index=to_utc_aware(df["asof_utc"]),
@@ -295,15 +311,15 @@ class PITAccessor:
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        """Resolve reference period to obs_date and return revision timeline."""
         ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
         if freq is not None and freq != ref_period.freq:
-            raise ValueError(
-                "Reference period frequency does not match requested freq."
-            )
+            raise PITContractError("Reference period frequency does not match requested freq.")
         obs_date = ref_period.end_obs_date()
         return self.get_revision_timeline(
-            series_key, obs_date, start_asof=start_asof, end_asof=end_asof
+            series_key,
+            obs_date,
+            start_asof=start_asof,
+            end_asof=end_asof,
         )
 
     def get_snapshot_ref(
@@ -315,12 +331,6 @@ class PITAccessor:
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        """
-        Snapshot query using reference period keys for start/end obs_date bounds.
-
-        start_ref/end_ref map to the end timestamp of the reference period.
-        """
-
         def _resolve(ref_value: str | RefPeriod | None) -> pd.Timestamp | None:
             if ref_value is None:
                 return None
@@ -329,9 +339,7 @@ class PITAccessor:
             else:
                 ref_period = RefPeriod.parse(ref_value)
             if freq is not None and ref_period.freq != freq:
-                raise ValueError(
-                    "Reference period frequency does not match requested freq."
-                )
+                raise PITContractError("Reference period frequency does not match requested freq.")
             return ref_period.end_obs_date()
 
         start_ts = _resolve(start_ref)
@@ -410,7 +418,7 @@ class PITAccessor:
                 json.dumps([spec.input_series_key]),
                 spec.axis,
                 spec.op,
-                serialize_params_for_lineage(spec.params),
+                serialize_params_for_lineage(spec.sanitized_params()),
                 engine_used,
                 spec.spec_hash(),
                 to_utc_naive(pd.Timestamp.now("UTC")),
@@ -492,7 +500,7 @@ class PITAccessor:
         *,
         transform_id: str,
         spec: PITTransformSpec,
-        engine_used: str,
+        engine_resolution: PITEngineResolution,
         source_asof: pd.Timestamp | None = None,
     ) -> str:
         payload: dict[str, object] = {
@@ -500,11 +508,14 @@ class PITAccessor:
             "input_series_key": spec.input_series_key,
             "op": spec.op,
             "axis": spec.axis,
-            "engine": engine_used,
+            "engine": engine_resolution.engine_used,
+            "engine_requested": engine_resolution.engine_requested,
             "params": spec.sanitized_params(),
             "spec_hash": spec.spec_hash(),
             "experimental": bool(spec.axis == "revision_path"),
         }
+        if engine_resolution.fallback_reason is not None:
+            payload["fallback_reason"] = engine_resolution.fallback_reason
         if source_asof is not None:
             payload["source_asof_utc"] = source_asof.isoformat()
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -519,7 +530,7 @@ class PITAccessor:
         end_asof: pd.Timestamp | None,
         lag_policy: ReleaseLagPolicy | None,
         transform_id: str,
-        engine_used: str,
+        engine_resolution: PITEngineResolution,
     ) -> pd.DataFrame:
         asof_values = self._list_candidate_asofs(
             spec.input_series_key,
@@ -539,7 +550,7 @@ class PITAccessor:
                 source_asof = effective_asof(source_asof, spec.input_series_key, lag_policy)
 
             if source_asof > asof:
-                raise ValueError(
+                raise PITCausalityError(
                     "Causality violation: effective source_asof is later than output asof. "
                     f"source_asof={source_asof}, output_asof={asof}"
                 )
@@ -553,7 +564,11 @@ class PITAccessor:
             if snapshot.empty:
                 continue
 
-            transformed = apply_obs_path_transform(snapshot, spec).dropna()
+            transformed = apply_obs_path_transform(
+                snapshot,
+                spec,
+                engine=engine_resolution.engine_used,
+            ).dropna()
             if transformed.empty:
                 continue
 
@@ -567,7 +582,7 @@ class PITAccessor:
             meta_json = self._lineage_meta(
                 transform_id=transform_id,
                 spec=spec,
-                engine_used=engine_used,
+                engine_resolution=engine_resolution,
                 source_asof=source_asof,
             )
             chunks.append(
@@ -639,7 +654,7 @@ class PITAccessor:
         start_asof: pd.Timestamp | None,
         end_asof: pd.Timestamp | None,
         transform_id: str,
-        engine_used: str,
+        engine_resolution: PITEngineResolution,
     ) -> pd.DataFrame:
         raw = self._fetch_revision_rows(
             series_key=spec.input_series_key,
@@ -663,7 +678,11 @@ class PITAccessor:
                 index=pd.DatetimeIndex(group["asof_utc"]),
                 name=spec.input_series_key,
             ).sort_index()
-            transformed = apply_revision_path_transform(timeline, spec).dropna()
+            transformed = apply_revision_path_transform(
+                timeline,
+                spec,
+                engine=engine_resolution.engine_used,
+            ).dropna()
             if transformed.empty:
                 continue
 
@@ -677,7 +696,7 @@ class PITAccessor:
             meta_json = self._lineage_meta(
                 transform_id=transform_id,
                 spec=spec,
-                engine_used=engine_used,
+                engine_resolution=engine_resolution,
             )
             chunks.append(
                 pd.DataFrame(
@@ -698,9 +717,85 @@ class PITAccessor:
             )
         return pd.concat(chunks, ignore_index=True)
 
+    def _materialize_transform_rows(
+        self,
+        spec: PITTransformSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None,
+        end_obs: pd.Timestamp | None,
+        start_asof: pd.Timestamp | None,
+        end_asof: pd.Timestamp | None,
+        *,
+        lag_policy: ReleaseLagPolicy | None,
+        allow_experimental: bool,
+        on_engine_mismatch: EngineMismatchPolicy,
+    ) -> tuple[PITTransformSpec, pd.DataFrame, PITEngineResolution]:
+        spec_obj = coerce_transform_spec(spec)
+        validate_transform_spec(spec_obj)
+
+        if spec_obj.axis == "revision_path" and not allow_experimental:
+            raise PITExperimentalFeatureError(
+                "axis='revision_path' is experimental. Set allow_experimental=True to enable it."
+            )
+
+        engine_resolution = resolve_engine(
+            spec_obj,
+            on_engine_mismatch=on_engine_mismatch,
+        )
+        transform_id = spec_obj.transform_id()
+
+        if spec_obj.axis == "obs_path":
+            result_df = self._build_obs_path_rows(
+                spec=spec_obj,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+                lag_policy=lag_policy,
+                transform_id=transform_id,
+                engine_resolution=engine_resolution,
+            )
+        elif spec_obj.axis == "revision_path":
+            result_df = self._build_revision_path_rows(
+                spec=spec_obj,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+                transform_id=transform_id,
+                engine_resolution=engine_resolution,
+            )
+        else:
+            raise PITUnsupportedOperationError(f"Unsupported transform axis: {spec_obj.axis}")
+
+        return spec_obj, result_df, engine_resolution
+
+    def preview_transform(
+        self,
+        spec: PITTransformSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        lag_policy: ReleaseLagPolicy | None = None,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
+    ) -> pd.DataFrame:
+        _, result_df, _ = self._materialize_transform_rows(
+            spec,
+            start_obs,
+            end_obs,
+            start_asof,
+            end_asof,
+            lag_policy=lag_policy,
+            allow_experimental=allow_experimental,
+            on_engine_mismatch=on_engine_mismatch,
+        )
+        return result_df.copy()
+
     def apply_transform(
         self,
-        spec: PITTransformSpec,
+        spec: PITTransformSpec | Mapping[str, Any],
         start_obs: pd.Timestamp | None = None,
         end_obs: pd.Timestamp | None = None,
         start_asof: pd.Timestamp | None = None,
@@ -709,57 +804,44 @@ class PITAccessor:
         persist: bool = True,
         overwrite: bool = False,
         lag_policy: ReleaseLagPolicy | None = None,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
     ) -> PITTransformResult:
-        validate_transform_spec(spec)
-
         started_utc = pd.Timestamp.now(tz="UTC")
-        engine_used = resolve_engine(spec)
-        transform_id = spec.transform_id()
 
-        if spec.axis == "obs_path":
-            result_df = self._build_obs_path_rows(
-                spec=spec,
-                start_obs=start_obs,
-                end_obs=end_obs,
-                start_asof=start_asof,
-                end_asof=end_asof,
-                lag_policy=lag_policy,
-                transform_id=transform_id,
-                engine_used=engine_used,
-            )
-        elif spec.axis == "revision_path":
-            result_df = self._build_revision_path_rows(
-                spec=spec,
-                start_obs=start_obs,
-                end_obs=end_obs,
-                start_asof=start_asof,
-                end_asof=end_asof,
-                transform_id=transform_id,
-                engine_used=engine_used,
-            )
-        else:
-            raise ValueError(f"Unsupported transform axis: {spec.axis}")
+        spec_obj, result_df, engine_resolution = self._materialize_transform_rows(
+            spec,
+            start_obs,
+            end_obs,
+            start_asof,
+            end_asof,
+            lag_policy=lag_policy,
+            allow_experimental=allow_experimental,
+            on_engine_mismatch=on_engine_mismatch,
+        )
 
         if persist:
             if overwrite:
                 self._delete_transformed_rows(
-                    output_series_key=spec.output_series_key,
+                    output_series_key=spec_obj.output_series_key,
                     start_obs=start_obs,
                     end_obs=end_obs,
                     start_asof=start_asof,
                     end_asof=end_asof,
                 )
             if not result_df.empty:
-                self.upsert_pit_observations(result_df)
+                # Transform outputs can intentionally use period-end labels that are
+                # later than asof_utc for certain operators (for example resample).
+                self.upsert_pit_observations(result_df, strict=False)
 
-            self._upsert_transform_metadata(spec, engine_used)
+            self._upsert_transform_metadata(spec_obj, engine_resolution.engine_used)
 
         finished_utc = pd.Timestamp.now(tz="UTC")
         status = "success" if persist else "dry_run"
 
         if persist:
             self._insert_transform_run(
-                transform_id=transform_id,
+                transform_id=spec_obj.transform_id(),
                 start_obs=start_obs,
                 end_obs=end_obs,
                 start_asof=start_asof,
@@ -771,12 +853,14 @@ class PITAccessor:
             )
 
         return PITTransformResult(
-            transform_id=transform_id,
-            output_series_key=spec.output_series_key,
+            transform_id=spec_obj.transform_id(),
+            output_series_key=spec_obj.output_series_key,
             rows_written=int(len(result_df)),
-            engine_used=engine_used,
+            engine_used=engine_resolution.engine_used,
             run_started_utc=started_utc,
             run_finished_utc=finished_utc,
+            engine_requested=engine_resolution.engine_requested,
+            fallback_reason=engine_resolution.fallback_reason,
         )
 
     def list_transforms(self, output_series_key: str | None = None) -> pd.DataFrame:

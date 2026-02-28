@@ -1,38 +1,42 @@
 # Point-in-Time (PIT) Data
 
-Alphaforge supports revised macro series using a canonical PIT table and three layers:
+Alphaforge PIT provides:
 
-1. Snapshot and revision-timeline retrieval (`PITAccessor`)
-2. PIT-preserving transforms (`apply_transform`)
+1. PIT ingestion and retrieval (`PITAccessor`)
+2. PIT-preserving transforms (`apply_transform`, `preview_transform`)
 3. PIT safety and integration (`ReleaseLagPolicy`, `PITDataSource`)
 
 ## Canonical PIT schema
 
-The PIT table is created automatically when using `DuckDBParquetStore`.
-
 | Column | Type | Notes |
 | --- | --- | --- |
-| series_key | TEXT | Series identifier (for example `"GDP"`) |
-| obs_date | TIMESTAMP | Reference period end date |
-| asof_utc | TIMESTAMP | Vintage / knowledge time |
-| value | DOUBLE | Observed value |
-| release_time_utc | TIMESTAMP | Optional release timestamp |
-| revision_id | TEXT | Optional revision label |
-| source | TEXT | Optional source |
-| meta_json | TEXT | Optional JSON-encoded provenance |
-| ingested_utc | TIMESTAMP | Default `now()` at insert |
+| `series_key` | TEXT | Series identifier |
+| `obs_date` | TIMESTAMP | Observation date / period-end |
+| `asof_utc` | TIMESTAMP | Vintage (knowledge timestamp) |
+| `value` | DOUBLE | Observation value |
+| `release_time_utc` | TIMESTAMP | Optional release timestamp |
+| `revision_id` | TEXT | Optional revision label |
+| `source` | TEXT | Optional source descriptor |
+| `meta_json` | TEXT | Optional lineage payload |
+| `ingested_utc` | TIMESTAMP | Insert timestamp |
 
 Uniqueness is enforced on `(series_key, obs_date, asof_utc)`.
 
-## Timezone handling
+## Ingestion contract
 
-Input timestamps are normalized to timezone-aware UTC on ingestion. Snapshot and revision queries return UTC indexes.
+`PITAccessor.upsert_pit_observations(df, strict=True)` validates PIT rows before write.
 
-## Core usage
+In strict mode, ingestion fails on:
+
+- missing required columns
+- nulls in required fields
+- duplicate PIT keys in the input frame
+- timezone issues in `asof_utc` / `release_time_utc`
+- future rows where `obs_date > asof_utc`
 
 ```python
 import pandas as pd
-from alphaforge.pit.accessor import PITAccessor
+from alphaforge.pit import PITAccessor
 from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 
 store = DuckDBParquetStore(root="./store")
@@ -49,16 +53,21 @@ pit.upsert_pit_observations(
             ],
             "value": [1.0, 1.1],
         }
-    )
+    ),
+    strict=True,
 )
+```
 
+## Snapshot and timeline retrieval
+
+```python
 snapshot = pit.get_snapshot("GDP", pd.Timestamp("2025-02-15", tz="UTC"))
 timeline = pit.get_revision_timeline("GDP", pd.Timestamp("2024-12-31", tz="UTC"))
 ```
 
-## Transform API (obs_path)
+## Transform API (`obs_path`)
 
-`PITAccessor.apply_transform` creates derived PIT series while preserving as-of causality.
+Use `preview_transform` to inspect rows before persistence, then `apply_transform` to write.
 
 ```python
 from alphaforge.pit.transforms import PITTransformSpec
@@ -69,21 +78,17 @@ spec = PITTransformSpec(
     axis="obs_path",
     op="resample",
     params={"rule": "Q", "agg": "last"},
+    engine="auto",
 )
 
+preview = pit.preview_transform(spec)
 result = pit.apply_transform(spec, overwrite=True)
-print(result.transform_id, result.rows_written)
+print(result.engine_requested, result.engine_used, result.fallback_reason)
 ```
 
-Supported `obs_path` operators:
+## Experimental `revision_path`
 
-- `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `path_apply`
-
-## Experimental transform API (`revision_path`)
-
-`revision_path` is experimental in this release and currently supports:
-
-- `diff`, `lag`, `rolling`, `expanding`
+`revision_path` requires explicit opt-in per call.
 
 ```python
 spec = PITTransformSpec(
@@ -93,39 +98,45 @@ spec = PITTransformSpec(
     op="diff",
     params={"periods": 1},
 )
-pit.apply_transform(spec, overwrite=True)
+
+pit.apply_transform(spec, overwrite=True, allow_experimental=True)
 ```
 
-For `revision_path`, transforms run along each `(series_key, obs_date)` revision timeline ordered by `asof_utc`.
+Without `allow_experimental=True`, Alphaforge raises `PITExperimentalFeatureError`.
 
-## Lag policy and leakage guards
+## Engine contract
+
+- `engine="auto"` prefers `duckdb` for supported op+axis+params combinations.
+- `engine="duckdb"` raises `PITEngineError` when a spec is unsupported.
+- You can force fallback with `on_engine_mismatch="fallback"` to run on `python`.
+- `path_apply` is Python-only in v1.
 
 ```python
-from alphaforge.pit.guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
-
-policy = ReleaseLagPolicy(default_lag=pd.Timedelta(days=30))
-cutoff = effective_asof(pd.Timestamp("2025-04-15", tz="UTC"), "GDP", policy)
-
-report = pit_leakage_report(
-    pd.DataFrame(
-        {
-            "series_key": ["GDP"],
-            "obs_date": [pd.Timestamp("2025-03-31", tz="UTC")],
-            "asof_utc": [pd.Timestamp("2025-04-15", tz="UTC")],
-            "value": [2.1],
-        }
-    )
+pit.apply_transform(
+    PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="GDP_diff",
+        op="diff",
+        params={"periods": 1},
+        engine="duckdb",
+    ),
+    on_engine_mismatch="fallback",
 )
 ```
 
-## Dataset integration via PITDataSource
+## PITDataSource integration
+
+`PITDataSource` exposes two tables:
+
+- `pit.snapshot` (requires `Query.asof`, supports only `vintage="latest"`)
+- `pit.observations` (raw rows with optional as-of filtering, currently `vintage="latest"` only)
 
 ```python
 from alphaforge.data.context import DataContext
 from alphaforge.data.pit_source import PITDataSource
 from alphaforge.data.query import Query
 
-pit_source = PITDataSource(pit=pit, lag_policy=policy)
+pit_source = PITDataSource(pit=pit)
 ctx = DataContext(sources={"pit": pit_source}, calendars={}, store=store)
 
 panel = ctx.fetch_panel(
@@ -139,23 +150,7 @@ panel = ctx.fetch_panel(
 )
 ```
 
-Tables exposed by `PITDataSource`:
-
-- `pit.snapshot`: latest-leq snapshot view (`Query.asof` required)
-- `pit.observations`: raw vintage rows with optional as-of filtering
-
-## Reference period keys
-
-PIT ref helpers map keys to `obs_date` end timestamps (UTC midnight).
-
-Supported formats:
-
-- Annual: `YYYY`
-- Quarterly: `YYYYQq`
-- Monthly: `YYYY-MM` or `YYYY/MM`
-- Month-end date: `YYYY-MM-DD` (interpreted as monthly)
-
-Example:
+## Reference-period helpers
 
 ```python
 timeline = pit.get_revision_timeline_ref("GDP", "2024Q4")

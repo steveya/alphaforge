@@ -42,6 +42,7 @@ nav:
       - Dataset Spec: guides/dataset-spec.md
       - Data Sources: guides/data-sources.md
       - PIT Data: guides/pit.md
+      - PIT API Contract: guides/pit-api-contract.md
       - Development: guides/development.md
   - API:
       - Package: api/package.md
@@ -50,6 +51,8 @@ nav:
       - Dataset Spec: api/dataset-spec.md
       - PIT Accessor: api/pit-accessor.md
       - PIT Transforms: api/pit-transforms.md
+      - PIT Exceptions: api/pit-exceptions.md
+      - PIT Validation: api/pit-validation.md
       - PIT Guards: api/pit-guards.md
       - PIT Tasks: api/pit-tasks.md
       - PIT Data Source: api/pit-source.md
