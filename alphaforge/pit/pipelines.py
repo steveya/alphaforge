@@ -56,23 +56,25 @@ class PITPipelineSpec:
         self._validate()
 
         pending = {step.name: step for step in self.steps}
+        declared_order = [step.name for step in self.steps]
         resolved: list[PITPipelineStep] = []
         done: set[str] = set()
 
         while pending:
-            ready = [
-                step
-                for step in pending.values()
-                if all(dep in done for dep in step.depends_on)
+            ready_names = [
+                name
+                for name in declared_order
+                if name in pending and all(dep in done for dep in pending[name].depends_on)
             ]
-            if not ready:
+            if not ready_names:
                 unresolved = ", ".join(sorted(pending))
                 raise PITContractError(
                     "Pipeline dependency graph contains a cycle or unresolved dependencies: "
                     f"{unresolved}"
                 )
 
-            for step in sorted(ready, key=lambda s: s.name):
+            for name in ready_names:
+                step = pending[name]
                 resolved.append(step)
                 done.add(step.name)
                 pending.pop(step.name, None)
@@ -149,6 +151,7 @@ def coerce_pipeline_spec(spec: PITPipelineSpec | Mapping[str, Any]) -> PITPipeli
         step_spec = coerce_transform_spec(raw["spec"])
 
         raw_deps = raw.get("depends_on", ())
+        deps: tuple[str, ...]
         if isinstance(raw_deps, str):
             deps = (raw_deps,)
         elif isinstance(raw_deps, (list, tuple)):

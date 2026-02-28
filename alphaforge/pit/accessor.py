@@ -18,6 +18,11 @@ from .exceptions import (
     PITValidationError,
 )
 from .guards import ReleaseLagPolicy, effective_asof
+from .pipelines import (
+    PITPipelineResult,
+    PITPipelineSpec,
+    coerce_pipeline_spec,
+)
 from .transforms import (
     EngineMismatchPolicy,
     PITEngineResolution,
@@ -36,6 +41,8 @@ from .validation import validate_pit_observations
 _PIT_TABLE = "pit_observations"
 _PIT_TRANSFORMS_TABLE = "pit_transforms"
 _PIT_TRANSFORM_RUNS_TABLE = "pit_transform_runs"
+_PIT_PIPELINES_TABLE = "pit_pipelines"
+_PIT_PIPELINE_RUNS_TABLE = "pit_pipeline_runs"
 
 
 def to_utc_naive(value):
@@ -139,6 +146,55 @@ def ensure_pit_table(conn: duckdb.DuckDBPyConnection) -> None:
         f"""
         CREATE INDEX IF NOT EXISTS pit_transform_runs_transform_id
         ON {_PIT_TRANSFORM_RUNS_TABLE}(transform_id, started_utc);
+        """
+    )
+
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_PIT_PIPELINES_TABLE} (
+            pipeline_id TEXT PRIMARY KEY,
+            spec_hash TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            description TEXT,
+            created_utc TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """
+    )
+
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_PIT_PIPELINE_RUNS_TABLE} (
+            run_id TEXT PRIMARY KEY,
+            pipeline_id TEXT NOT NULL,
+            start_obs TIMESTAMP,
+            end_obs TIMESTAMP,
+            start_asof TIMESTAMP,
+            end_asof TIMESTAMP,
+            incremental BOOLEAN NOT NULL,
+            requested_since_asof TIMESTAMP,
+            effective_start_asof TIMESTAMP,
+            requested_since_run_id TEXT,
+            max_output_asof TIMESTAMP,
+            rows_written BIGINT NOT NULL,
+            step_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            started_utc TIMESTAMP NOT NULL,
+            finished_utc TIMESTAMP NOT NULL
+        );
+        """
+    )
+
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS pit_pipeline_runs_pipeline_id
+        ON {_PIT_PIPELINE_RUNS_TABLE}(pipeline_id, started_utc);
+        """
+    )
+
+    conn.execute(
+        f"""
+        ALTER TABLE {_PIT_PIPELINE_RUNS_TABLE}
+        ADD COLUMN IF NOT EXISTS max_output_asof TIMESTAMP
         """
     )
 
@@ -476,6 +532,209 @@ class PITAccessor:
                 to_utc_naive(finished_utc),
             ],
         )
+
+    def _upsert_pipeline_metadata(self, spec: PITPipelineSpec) -> str:
+        pipeline_id = spec.resolved_pipeline_id()
+        self.conn.execute(
+            f"""
+            INSERT INTO {_PIT_PIPELINES_TABLE} (
+                pipeline_id,
+                spec_hash,
+                spec_json,
+                description,
+                created_utc
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(pipeline_id) DO UPDATE SET
+                spec_hash=excluded.spec_hash,
+                spec_json=excluded.spec_json,
+                description=excluded.description,
+                created_utc=excluded.created_utc
+            """,
+            [
+                pipeline_id,
+                spec.spec_hash(),
+                json.dumps(spec.spec_payload(), sort_keys=True, separators=(",", ":")),
+                spec.description,
+                to_utc_naive(pd.Timestamp.now("UTC")),
+            ],
+        )
+        return pipeline_id
+
+    def _insert_pipeline_run(
+        self,
+        *,
+        run_id: str,
+        pipeline_id: str,
+        start_obs: pd.Timestamp | None,
+        end_obs: pd.Timestamp | None,
+        start_asof: pd.Timestamp | None,
+        end_asof: pd.Timestamp | None,
+        incremental: bool,
+        requested_since_asof: pd.Timestamp | None,
+        effective_start_asof: pd.Timestamp | None,
+        requested_since_run_id: str | None,
+        max_output_asof: pd.Timestamp | None,
+        rows_written: int,
+        step_count: int,
+        status: str,
+        started_utc: pd.Timestamp,
+        finished_utc: pd.Timestamp,
+    ) -> None:
+        self.conn.execute(
+            f"""
+            INSERT INTO {_PIT_PIPELINE_RUNS_TABLE} (
+                run_id,
+                pipeline_id,
+                start_obs,
+                end_obs,
+                start_asof,
+                end_asof,
+                incremental,
+                requested_since_asof,
+                effective_start_asof,
+                requested_since_run_id,
+                max_output_asof,
+                rows_written,
+                step_count,
+                status,
+                started_utc,
+                finished_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                run_id,
+                pipeline_id,
+                to_utc_naive(start_obs),
+                to_utc_naive(end_obs),
+                to_utc_naive(start_asof),
+                to_utc_naive(end_asof),
+                bool(incremental),
+                to_utc_naive(requested_since_asof),
+                to_utc_naive(effective_start_asof),
+                requested_since_run_id,
+                to_utc_naive(max_output_asof),
+                int(rows_written),
+                int(step_count),
+                status,
+                to_utc_naive(started_utc),
+                to_utc_naive(finished_utc),
+            ],
+        )
+
+    def _resolve_pipeline_effective_start_asof(
+        self,
+        *,
+        pipeline_id: str,
+        incremental: bool,
+        start_asof: pd.Timestamp | None,
+        since_asof: pd.Timestamp | None,
+        since_run_id: str | None,
+    ) -> pd.Timestamp | None:
+        if not incremental and (since_asof is not None or since_run_id is not None):
+            raise PITContractError(
+                "since_asof/since_run_id require incremental=True for pipeline execution."
+            )
+
+        anchors: list[pd.Timestamp] = []
+        if start_asof is not None:
+            anchors.append(to_utc_aware(start_asof))
+        if since_asof is not None:
+            anchors.append(to_utc_aware(since_asof))
+
+        if since_run_id is not None:
+            row = self.conn.execute(
+                f"""
+                SELECT pipeline_id, max_output_asof, finished_utc
+                FROM {_PIT_PIPELINE_RUNS_TABLE}
+                WHERE run_id = ?
+                """,
+                [since_run_id],
+            ).fetchone()
+            if row is None:
+                raise PITContractError(f"Unknown PIT pipeline run_id: {since_run_id}")
+            run_pipeline_id = str(row[0])
+            if run_pipeline_id != pipeline_id:
+                raise PITContractError(
+                    "since_run_id belongs to a different pipeline. "
+                    f"Expected pipeline_id='{pipeline_id}', got '{run_pipeline_id}'."
+                )
+            explicit_max_asof = row[1]
+            if explicit_max_asof is not None:
+                anchors.append(to_utc_aware(explicit_max_asof))
+            else:
+                inferred = self._pipeline_max_output_asof(pipeline_id)
+                if inferred is not None:
+                    anchors.append(inferred)
+                else:
+                    anchors.append(to_utc_aware(row[2]))
+        elif incremental and since_asof is None:
+            latest = self.conn.execute(
+                f"""
+                SELECT max_output_asof, finished_utc
+                FROM {_PIT_PIPELINE_RUNS_TABLE}
+                WHERE pipeline_id = ? AND status = 'success'
+                ORDER BY started_utc DESC
+                LIMIT 1
+                """,
+                [pipeline_id],
+            ).fetchone()
+            if latest is not None:
+                explicit_max_asof = latest[0]
+                if explicit_max_asof is not None:
+                    anchors.append(to_utc_aware(explicit_max_asof))
+                else:
+                    inferred = self._pipeline_max_output_asof(pipeline_id)
+                    if inferred is not None:
+                        anchors.append(inferred)
+                    else:
+                        anchors.append(to_utc_aware(latest[1]))
+
+        if not anchors:
+            return None
+        return max(anchors)
+
+    def _pipeline_max_output_asof(self, pipeline_id: str) -> pd.Timestamp | None:
+        row = self.conn.execute(
+            f"SELECT spec_json FROM {_PIT_PIPELINES_TABLE} WHERE pipeline_id = ?",
+            [pipeline_id],
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+
+        try:
+            payload = json.loads(str(row[0]))
+        except json.JSONDecodeError:
+            return None
+        raw_steps = payload.get("steps")
+        if not isinstance(raw_steps, list):
+            return None
+
+        keys: list[str] = []
+        for raw in raw_steps:
+            if not isinstance(raw, Mapping):
+                continue
+            raw_spec = raw.get("spec")
+            if not isinstance(raw_spec, Mapping):
+                continue
+            key = str(raw_spec.get("output_series_key", "")).strip()
+            if key:
+                keys.append(key)
+        keys = sorted(set(keys))
+        if not keys:
+            return None
+
+        placeholders = ", ".join(["?"] * len(keys))
+        max_row = self.conn.execute(
+            f"""
+            SELECT MAX(asof_utc)
+            FROM {_PIT_TABLE}
+            WHERE series_key IN ({placeholders})
+            """,
+            keys,
+        ).fetchone()
+        if max_row is None or max_row[0] is None:
+            return None
+        return to_utc_aware(max_row[0])
 
     def _delete_transformed_rows(
         self,
@@ -888,6 +1147,69 @@ class PITAccessor:
         )
         return result_df.copy()
 
+    def explain_transform(
+        self,
+        spec: PITTransformSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
+    ) -> dict[str, Any]:
+        spec_obj = coerce_transform_spec(spec)
+        validate_transform_spec(spec_obj)
+
+        if spec_obj.axis == "revision_path" and not allow_experimental:
+            raise PITExperimentalFeatureError(
+                "axis='revision_path' is experimental. Set allow_experimental=True to enable it."
+            )
+
+        input_keys = self._input_series_keys_for_spec(spec_obj)
+        if len(input_keys) == 1:
+            asof_values = self._list_candidate_asofs(
+                input_keys[0],
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+            )
+        else:
+            asof_values = self._list_candidate_asofs_multi(
+                input_keys,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+            )
+
+        engine_resolution = resolve_engine(
+            spec_obj,
+            on_engine_mismatch=on_engine_mismatch,
+        )
+
+        return {
+            "transform_id": spec_obj.transform_id(),
+            "spec_hash": spec_obj.spec_hash(),
+            "input_series_keys": input_keys,
+            "output_series_key": spec_obj.output_series_key,
+            "axis": spec_obj.axis,
+            "op": spec_obj.op,
+            "params": spec_obj.sanitized_params(),
+            "engine_requested": engine_resolution.engine_requested,
+            "engine_used": engine_resolution.engine_used,
+            "fallback_reason": engine_resolution.fallback_reason,
+            "candidate_asof_count": int(len(asof_values)),
+            "candidate_asof_start_utc": asof_values.min() if len(asof_values) else None,
+            "candidate_asof_end_utc": asof_values.max() if len(asof_values) else None,
+            "start_obs": to_utc_aware(start_obs) if start_obs is not None else None,
+            "end_obs": to_utc_aware(end_obs) if end_obs is not None else None,
+            "start_asof": to_utc_aware(start_asof) if start_asof is not None else None,
+            "end_asof": to_utc_aware(end_asof) if end_asof is not None else None,
+            "experimental": bool(spec_obj.axis == "revision_path"),
+        }
+
     def apply_transform(
         self,
         spec: PITTransformSpec | Mapping[str, Any],
@@ -958,6 +1280,257 @@ class PITAccessor:
             fallback_reason=engine_resolution.fallback_reason,
         )
 
+    def explain_pipeline(
+        self,
+        spec: PITPipelineSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
+    ) -> dict[str, Any]:
+        pipeline_spec = coerce_pipeline_spec(spec)
+        pipeline_id = pipeline_spec.resolved_pipeline_id()
+        ordered_steps = pipeline_spec.ordered_steps()
+        effective_start_asof = self._resolve_pipeline_effective_start_asof(
+            pipeline_id=pipeline_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+
+        step_explanations = [
+            {
+                "step_name": step.name,
+                "depends_on": list(step.depends_on),
+                "transform": self.explain_transform(
+                    step.normalized_spec(),
+                    start_obs=start_obs,
+                    end_obs=end_obs,
+                    start_asof=effective_start_asof,
+                    end_asof=end_asof,
+                    allow_experimental=allow_experimental,
+                    on_engine_mismatch=on_engine_mismatch,
+                ),
+            }
+            for step in ordered_steps
+        ]
+
+        return {
+            "pipeline_id": pipeline_id,
+            "spec_hash": pipeline_spec.spec_hash(),
+            "description": pipeline_spec.description,
+            "incremental": incremental,
+            "requested_since_asof": to_utc_aware(since_asof) if since_asof is not None else None,
+            "requested_since_run_id": since_run_id,
+            "effective_start_asof": effective_start_asof,
+            "end_asof": to_utc_aware(end_asof) if end_asof is not None else None,
+            "start_obs": to_utc_aware(start_obs) if start_obs is not None else None,
+            "end_obs": to_utc_aware(end_obs) if end_obs is not None else None,
+            "step_count": len(step_explanations),
+            "steps": step_explanations,
+        }
+
+    def preview_pipeline(
+        self,
+        spec: PITPipelineSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        overwrite: bool = False,
+        lag_policy: ReleaseLagPolicy | None = None,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+        include_intermediate: bool = False,
+    ) -> pd.DataFrame:
+        pipeline_spec = coerce_pipeline_spec(spec)
+        pipeline_id = pipeline_spec.resolved_pipeline_id()
+        effective_start_asof = self._resolve_pipeline_effective_start_asof(
+            pipeline_id=pipeline_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+        ordered_steps = pipeline_spec.ordered_steps()
+
+        step_frames: list[pd.DataFrame] = []
+        self.conn.execute("BEGIN TRANSACTION")
+        try:
+            for step in ordered_steps:
+                step_spec, result_df, _ = self._materialize_transform_rows(
+                    step.normalized_spec(),
+                    start_obs,
+                    end_obs,
+                    effective_start_asof,
+                    end_asof,
+                    lag_policy=lag_policy,
+                    allow_experimental=allow_experimental,
+                    on_engine_mismatch=on_engine_mismatch,
+                )
+                if overwrite:
+                    self._delete_transformed_rows(
+                        output_series_key=step_spec.output_series_key,
+                        start_obs=start_obs,
+                        end_obs=end_obs,
+                        start_asof=effective_start_asof,
+                        end_asof=end_asof,
+                    )
+                if not result_df.empty:
+                    self.upsert_pit_observations(result_df, strict=False)
+                    tagged = result_df.copy()
+                    tagged["step_name"] = step.name
+                    step_frames.append(tagged)
+            self.conn.execute("ROLLBACK")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+        if not step_frames:
+            base_columns = [
+                "series_key",
+                "obs_date",
+                "asof_utc",
+                "value",
+                "source",
+                "meta_json",
+                "step_name",
+            ]
+            return pd.DataFrame(columns=base_columns)
+
+        if include_intermediate:
+            return pd.concat(step_frames, ignore_index=True)
+        return step_frames[-1].reset_index(drop=True)
+
+    def apply_pipeline(
+        self,
+        spec: PITPipelineSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        overwrite: bool = False,
+        lag_policy: ReleaseLagPolicy | None = None,
+        allow_experimental: bool = False,
+        on_engine_mismatch: EngineMismatchPolicy = "error",
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+    ) -> PITPipelineResult:
+        started_utc = pd.Timestamp.now(tz="UTC")
+        run_id = str(uuid.uuid4())
+        pipeline_spec = coerce_pipeline_spec(spec)
+        pipeline_id = self._upsert_pipeline_metadata(pipeline_spec)
+        effective_start_asof = self._resolve_pipeline_effective_start_asof(
+            pipeline_id=pipeline_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+        ordered_steps = pipeline_spec.ordered_steps()
+        step_results: list[PITTransformResult] = []
+        total_rows = 0
+        max_output_asof: pd.Timestamp | None = None
+
+        try:
+            for step in ordered_steps:
+                result = self.apply_transform(
+                    step.normalized_spec(),
+                    start_obs=start_obs,
+                    end_obs=end_obs,
+                    start_asof=effective_start_asof,
+                    end_asof=end_asof,
+                    persist=True,
+                    overwrite=overwrite,
+                    lag_policy=lag_policy,
+                    allow_experimental=allow_experimental,
+                    on_engine_mismatch=on_engine_mismatch,
+                )
+                step_results.append(result)
+                total_rows += int(result.rows_written)
+                if result.rows_written > 0:
+                    row = self.conn.execute(
+                        f"""
+                        SELECT MAX(asof_utc)
+                        FROM {_PIT_TABLE}
+                        WHERE series_key = ? AND source = ?
+                        """,
+                        [
+                            result.output_series_key,
+                            f"pit_transform:{result.transform_id}",
+                        ],
+                    ).fetchone()
+                    if row is not None and row[0] is not None:
+                        candidate = to_utc_aware(row[0])
+                        if max_output_asof is None or candidate > max_output_asof:
+                            max_output_asof = candidate
+            status = "success"
+        except Exception:
+            finished_utc = pd.Timestamp.now(tz="UTC")
+            self._insert_pipeline_run(
+                run_id=run_id,
+                pipeline_id=pipeline_id,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+                incremental=incremental,
+                requested_since_asof=since_asof,
+                effective_start_asof=effective_start_asof,
+                requested_since_run_id=since_run_id,
+                max_output_asof=max_output_asof,
+                rows_written=total_rows,
+                step_count=len(step_results),
+                status="failed",
+                started_utc=started_utc,
+                finished_utc=finished_utc,
+            )
+            raise
+
+        finished_utc = pd.Timestamp.now(tz="UTC")
+        self._insert_pipeline_run(
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            start_obs=start_obs,
+            end_obs=end_obs,
+            start_asof=start_asof,
+            end_asof=end_asof,
+            incremental=incremental,
+            requested_since_asof=since_asof,
+            effective_start_asof=effective_start_asof,
+            requested_since_run_id=since_run_id,
+            max_output_asof=max_output_asof,
+            rows_written=total_rows,
+            step_count=len(step_results),
+            status=status,
+            started_utc=started_utc,
+            finished_utc=finished_utc,
+        )
+        return PITPipelineResult(
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+            status=status,
+            step_results=tuple(step_results),
+            rows_written=total_rows,
+            run_started_utc=started_utc,
+            run_finished_utc=finished_utc,
+            incremental=incremental,
+            effective_start_asof=effective_start_asof,
+        )
+
     def list_transforms(self, output_series_key: str | None = None) -> pd.DataFrame:
         query = f"""
             SELECT
@@ -982,4 +1555,85 @@ class PITAccessor:
         if df.empty:
             return df
         df["created_utc"] = to_utc_aware(df["created_utc"])
+        return df
+
+    def list_pipelines(self, pipeline_id: str | None = None) -> pd.DataFrame:
+        query = f"""
+            SELECT
+                pipeline_id,
+                spec_hash,
+                spec_json,
+                description,
+                created_utc
+            FROM {_PIT_PIPELINES_TABLE}
+        """
+        params: list[object] = []
+        if pipeline_id is not None:
+            query += " WHERE pipeline_id = ?"
+            params.append(pipeline_id)
+        query += " ORDER BY created_utc DESC, pipeline_id"
+
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return df
+        df["created_utc"] = to_utc_aware(df["created_utc"])
+        return df
+
+    def list_pipeline_runs(
+        self,
+        pipeline_id: str | None = None,
+        *,
+        limit: int | None = 100,
+    ) -> pd.DataFrame:
+        query = f"""
+            SELECT
+                run_id,
+                pipeline_id,
+                start_obs,
+                end_obs,
+                start_asof,
+                end_asof,
+                incremental,
+                requested_since_asof,
+                effective_start_asof,
+                requested_since_run_id,
+                max_output_asof,
+                rows_written,
+                step_count,
+                status,
+                started_utc,
+                finished_utc
+            FROM {_PIT_PIPELINE_RUNS_TABLE}
+        """
+        params: list[object] = []
+        clauses: list[str] = []
+        if pipeline_id is not None:
+            clauses.append("pipeline_id = ?")
+            params.append(pipeline_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY started_utc DESC, run_id"
+        if limit is not None:
+            if limit <= 0:
+                raise PITContractError("list_pipeline_runs limit must be > 0 when provided.")
+            query += " LIMIT ?"
+            params.append(int(limit))
+
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return df
+        dt_cols = [
+            "start_obs",
+            "end_obs",
+            "start_asof",
+            "end_asof",
+            "requested_since_asof",
+            "effective_start_asof",
+            "max_output_asof",
+            "started_utc",
+            "finished_utc",
+        ]
+        for col in dt_cols:
+            if col in df.columns:
+                df[col] = to_utc_aware(df[col])
         return df

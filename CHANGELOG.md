@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added PIT transform pipeline orchestration (`PITPipelineSpec`, `PITPipelineStep`, `preview_pipeline`, `apply_pipeline`, `explain_pipeline`) with dependency-safe execution.
+- Added PIT pipeline metadata/run tracking tables and accessors (`list_pipelines`, `list_pipeline_runs`) for reproducible run history.
+- Added incremental pipeline controls (`incremental`, `since_asof`, `since_run_id`) and deterministic effective as-of anchor resolution.
 - Added PIT cross-series `op="binary"` transforms (`add`/`sub`/`mul`/`div`) with deterministic lineage and causality-preserving execution.
 - Added cross-series transform lineage payloads with per-input source as-of timestamps and multi-input transform metadata.
 - Expanded PIT task utilities with `revision_event_stream(...)` and `revision_volatility(...)`.

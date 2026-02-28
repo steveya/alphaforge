@@ -9,6 +9,12 @@ from .exceptions import (
     PITValidationError,
 )
 from .guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
+from .pipelines import (
+    PITPipelineResult,
+    PITPipelineSpec,
+    PITPipelineStep,
+    coerce_pipeline_spec,
+)
 from .ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .tasks import (
     first_vintage_snapshot,
@@ -38,6 +44,10 @@ __all__ = [
     "PITEngineError",
     "PITTransformSpec",
     "PITTransformResult",
+    "PITPipelineStep",
+    "PITPipelineSpec",
+    "PITPipelineResult",
+    "coerce_pipeline_spec",
     "PITValidationReport",
     "validate_pit_observations",
     "ReleaseLagPolicy",

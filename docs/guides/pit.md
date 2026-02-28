@@ -92,6 +92,44 @@ spec = PITTransformSpec(
 pit.apply_transform(spec, overwrite=True, allow_experimental=True)
 ```
 
+### Multi-step pipelines (preview + incremental apply)
+
+Pipelines compose multiple PIT transforms into an ordered DAG while preserving PIT semantics.
+
+```python
+from alphaforge.pit.pipelines import PITPipelineSpec, PITPipelineStep
+
+pipeline = PITPipelineSpec(
+    pipeline_id="macro/gdp_pipeline",
+    steps=(
+        PITPipelineStep(
+            name="lag",
+            spec={
+                "input_series_key": "GDP",
+                "output_series_key": "GDP_lag1",
+                "op": "lag",
+                "params": {"periods": 1},
+            },
+        ),
+        PITPipelineStep(
+            name="diff",
+            spec={
+                "input_series_key": "GDP_lag1",
+                "output_series_key": "GDP_lag1_diff",
+                "op": "diff",
+                "params": {"periods": 1},
+            },
+            depends_on=("lag",),
+        ),
+    ),
+)
+
+plan = pit.explain_pipeline(pipeline, incremental=True)
+preview = pit.preview_pipeline(pipeline, overwrite=True)
+result = pit.apply_pipeline(pipeline, overwrite=True, incremental=True)
+runs = pit.list_pipeline_runs(result.pipeline_id, limit=5)
+```
+
 ## Engine contract
 
 - `engine="auto"` prefers `duckdb` for supported op+axis+params combinations.
@@ -257,4 +295,82 @@ filled = forward_fill_with_staleness(
     target_index=pd.date_range("2024-12-31", periods=4, freq="ME", tz="UTC"),
 )
 assert {"value", "source_obs_date", "age", "is_stale", "age_days"}.issubset(filled.columns)
+```
+
+```python
+# docs-example:pit_pipeline_incremental
+from pathlib import Path
+import pandas as pd
+
+from alphaforge.pit import PITAccessor
+from alphaforge.pit.pipelines import PITPipelineSpec, PITPipelineStep
+from alphaforge.pit.transforms import PITTransformSpec
+from alphaforge.store.duckdb_parquet import DuckDBParquetStore
+
+TMP_DIR = globals().get("TMP_DIR", Path("./tmp"))
+store = DuckDBParquetStore(root=str(TMP_DIR / "pit_docs_example_4"))
+pit = PITAccessor(store.conn())
+
+pit.upsert_pit_observations(
+    pd.DataFrame(
+        {
+            "series_key": ["GDP", "GDP", "GDP"],
+            "obs_date": [
+                pd.Timestamp("2024-12-31"),
+                pd.Timestamp("2025-03-31"),
+                pd.Timestamp("2025-06-30"),
+            ],
+            "asof_utc": [
+                pd.Timestamp("2025-01-10", tz="UTC"),
+                pd.Timestamp("2025-04-10", tz="UTC"),
+                pd.Timestamp("2025-07-10", tz="UTC"),
+            ],
+            "value": [1.0, 2.0, 3.0],
+        }
+    )
+)
+
+pipeline = PITPipelineSpec(
+    pipeline_id="docs/gdp_pipeline",
+    steps=(
+        PITPipelineStep(
+            name="lag",
+            spec=PITTransformSpec(
+                input_series_key="GDP",
+                output_series_key="GDP_lag1",
+                op="lag",
+                params={"periods": 1},
+            ),
+        ),
+        PITPipelineStep(
+            name="diff",
+            spec=PITTransformSpec(
+                input_series_key="GDP_lag1",
+                output_series_key="GDP_lag1_diff",
+                op="diff",
+                params={"periods": 1},
+            ),
+            depends_on=("lag",),
+        ),
+    ),
+)
+
+preview = pit.preview_pipeline(pipeline, overwrite=True)
+assert not preview.empty
+first_run = pit.apply_pipeline(pipeline, overwrite=True)
+assert first_run.status == "success"
+
+pit.upsert_pit_observations(
+    pd.DataFrame(
+        {
+            "series_key": ["GDP"],
+            "obs_date": [pd.Timestamp("2025-09-30")],
+            "asof_utc": [pd.Timestamp("2025-10-10", tz="UTC")],
+            "value": [4.0],
+        }
+    )
+)
+second_run = pit.apply_pipeline(pipeline, incremental=True)
+assert second_run.status == "success"
+assert second_run.effective_start_asof is not None
 ```

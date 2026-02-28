@@ -34,6 +34,30 @@ Unknown parameter keys are rejected per operator.
 - `join` in `inner | left | right | outer` (default `inner`)
 - optional `fill_value`
 
+## Pipeline contract
+
+`PITPipelineSpec` defines a named collection of `PITPipelineStep` nodes with optional dependencies.
+
+- each step has unique `name`
+- `depends_on` must reference existing step names
+- execution order is deterministic and dependency-safe
+- step transforms use the same validation/engine/experimental contracts as `apply_transform`
+
+Pipeline APIs:
+
+- `PITAccessor.explain_pipeline(...)`
+- `PITAccessor.preview_pipeline(...)`
+- `PITAccessor.apply_pipeline(...)`
+- `PITAccessor.list_pipelines(...)`
+- `PITAccessor.list_pipeline_runs(...)`
+
+Incremental controls:
+
+- `incremental=True` enables anchored execution
+- `since_asof` sets an explicit as-of anchor
+- `since_run_id` anchors to a prior pipeline run
+- if no explicit anchor is provided, incremental runs anchor to the previous successful run’s max output as-of
+
 ## Engine contract
 
 PIT transforms support two execution backends:

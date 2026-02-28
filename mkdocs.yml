@@ -51,6 +51,7 @@ nav:
       - Dataset Spec: api/dataset-spec.md
       - PIT Accessor: api/pit-accessor.md
       - PIT Transforms: api/pit-transforms.md
+      - PIT Pipelines: api/pit-pipelines.md
       - PIT Exceptions: api/pit-exceptions.md
       - PIT Validation: api/pit-validation.md
       - PIT Guards: api/pit-guards.md
