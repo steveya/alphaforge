@@ -5,6 +5,8 @@ from typing import Mapping
 
 import pandas as pd
 
+from .exceptions import PITContractError
+
 
 def _to_utc(ts: pd.Timestamp | str) -> pd.Timestamp:
     out = pd.Timestamp(ts)
@@ -37,7 +39,7 @@ def effective_asof(
 
     if policy.cutoff_hour_utc is not None:
         if not 0 <= policy.cutoff_hour_utc <= 23:
-            raise ValueError("cutoff_hour_utc must be between 0 and 23.")
+            raise PITContractError("cutoff_hour_utc must be between 0 and 23.")
         if eff.hour < policy.cutoff_hour_utc:
             eff = eff.floor("D") - pd.Timedelta(seconds=1)
 
@@ -57,7 +59,7 @@ def pit_leakage_report(
 ) -> pd.DataFrame:
     """Structured leakage and PIT hygiene diagnostics for PIT-shaped data."""
     if ts_col not in df.columns or asof_col not in df.columns:
-        raise ValueError(f"Expected columns '{ts_col}' and '{asof_col}'.")
+        raise PITContractError(f"Expected columns '{ts_col}' and '{asof_col}'.")
 
     out = df.copy()
     ts = pd.to_datetime(out[ts_col])

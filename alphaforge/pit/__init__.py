@@ -1,4 +1,13 @@
 from .accessor import PITAccessor, ensure_pit_table
+from .exceptions import (
+    PITCausalityError,
+    PITContractError,
+    PITEngineError,
+    PITError,
+    PITExperimentalFeatureError,
+    PITUnsupportedOperationError,
+    PITValidationError,
+)
 from .guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
 from .ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .tasks import (
@@ -13,12 +22,22 @@ from .tasks import (
     yoy,
 )
 from .transforms import PITTransformResult, PITTransformSpec
+from .validation import PITValidationReport, validate_pit_observations
 
 __all__ = [
     "PITAccessor",
     "ensure_pit_table",
+    "PITError",
+    "PITContractError",
+    "PITValidationError",
+    "PITUnsupportedOperationError",
+    "PITExperimentalFeatureError",
+    "PITCausalityError",
+    "PITEngineError",
     "PITTransformSpec",
     "PITTransformResult",
+    "PITValidationReport",
+    "validate_pit_observations",
     "ReleaseLagPolicy",
     "effective_asof",
     "pit_leakage_report",

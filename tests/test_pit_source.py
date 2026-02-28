@@ -1,9 +1,11 @@
 import pandas as pd
+import pytest
 
 from alphaforge.data.context import DataContext
 from alphaforge.data.pit_source import PITDataSource
 from alphaforge.data.query import Query
 from alphaforge.pit.accessor import PITAccessor
+from alphaforge.pit.exceptions import PITContractError, PITUnsupportedOperationError
 from alphaforge.pit.guards import ReleaseLagPolicy, effective_asof
 from alphaforge.pit.transforms import PITTransformSpec
 from alphaforge.store.duckdb_parquet import DuckDBParquetStore
@@ -132,3 +134,73 @@ def test_snapshot_lag_policy_matches_effective_asof(tmp_path):
     got.index = pd.DatetimeIndex(got.index.get_level_values("ts_utc"))
     got = got.sort_index()
     pd.testing.assert_series_equal(got, expected.reindex(got.index), check_names=False)
+
+
+def test_snapshot_requires_asof(tmp_path):
+    ctx, pit = _make_ctx(tmp_path)
+    pit.upsert_pit_observations(_sample_df())
+
+    with pytest.raises(PITContractError, match="requires Query.asof"):
+        ctx.fetch_panel(
+            "pit",
+            Query(table="pit.snapshot", columns=["value"], entities=["GDP"]),
+        )
+
+
+def test_snapshot_and_observations_reject_unsupported_vintage_modes(tmp_path):
+    ctx, pit = _make_ctx(tmp_path)
+    pit.upsert_pit_observations(_sample_df())
+
+    with pytest.raises(PITUnsupportedOperationError, match="vintage='latest'"):
+        ctx.fetch_panel(
+            "pit",
+            Query(
+                table="pit.snapshot",
+                columns=["value"],
+                entities=["GDP"],
+                asof=pd.Timestamp("2025-04-15", tz="UTC"),
+                vintage="first",
+            ),
+        )
+
+    with pytest.raises(PITUnsupportedOperationError, match="vintage_id"):
+        ctx.fetch_panel(
+            "pit",
+            Query(
+                table="pit.snapshot",
+                columns=["value"],
+                entities=["GDP"],
+                asof=pd.Timestamp("2025-04-15", tz="UTC"),
+                vintage_id="foo",
+            ),
+        )
+
+    with pytest.raises(PITUnsupportedOperationError, match="vintage='latest'"):
+        ctx.fetch_panel(
+            "pit",
+            Query(
+                table="pit.observations",
+                columns=["value"],
+                entities=["GDP"],
+                vintage="first",
+            ),
+        )
+
+
+def test_pit_query_builder_helpers():
+    snapshot_q = PITDataSource.snapshot_query(
+        columns=["value", "asof_utc"],
+        entities=["GDP"],
+        asof=pd.Timestamp("2025-04-15", tz="UTC"),
+    )
+    assert snapshot_q.table == PITDataSource.SNAPSHOT_TABLE
+    assert snapshot_q.vintage == "latest"
+    assert snapshot_q.asof == pd.Timestamp("2025-04-15", tz="UTC")
+
+    observations_q = PITDataSource.observations_query(
+        columns=["value", "asof_utc"],
+        entities=["GDP"],
+        asof=pd.Timestamp("2025-04-15", tz="UTC"),
+    )
+    assert observations_q.table == PITDataSource.OBS_TABLE
+    assert observations_q.vintage == "latest"

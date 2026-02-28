@@ -31,6 +31,15 @@ from .features.ops import join_feature_frames, materialize
 from .features.realization import FeatureRealization, FitState
 from .features.template import FeatureTemplate, ParamSpec, SliceSpec
 from .pit.accessor import PITAccessor
+from .pit.exceptions import (
+    PITCausalityError,
+    PITContractError,
+    PITEngineError,
+    PITError,
+    PITExperimentalFeatureError,
+    PITUnsupportedOperationError,
+    PITValidationError,
+)
 from .pit.guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
 from .pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .pit.tasks import (
@@ -45,6 +54,7 @@ from .pit.tasks import (
     yoy,
 )
 from .pit.transforms import PITTransformResult, PITTransformSpec
+from .pit.validation import PITValidationReport, validate_pit_observations
 from .store.cache import MaterializationPolicy
 from .store.duckdb_parquet import DuckDBParquetStore
 from .time.align import AlignedPanel, AlignSpec, AvailabilityState, align_panel
@@ -101,8 +111,17 @@ __all__ = [
     "DuckDBParquetStore",
     "join_feature_frames",
     "PITAccessor",
+    "PITError",
+    "PITContractError",
+    "PITValidationError",
+    "PITUnsupportedOperationError",
+    "PITExperimentalFeatureError",
+    "PITCausalityError",
+    "PITEngineError",
     "PITTransformSpec",
     "PITTransformResult",
+    "PITValidationReport",
+    "validate_pit_observations",
     "ReleaseLagPolicy",
     "effective_asof",
     "pit_leakage_report",

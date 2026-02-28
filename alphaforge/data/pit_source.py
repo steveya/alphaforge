@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import pandas as pd
 
@@ -8,6 +9,7 @@ from alphaforge.data.query import Query
 from alphaforge.data.schema import TableSchema
 from alphaforge.data.source import DataSource
 from alphaforge.pit.accessor import PITAccessor, to_utc_aware, to_utc_naive
+from alphaforge.pit.exceptions import PITContractError, PITUnsupportedOperationError
 from alphaforge.pit.guards import ReleaseLagPolicy, effective_asof
 
 
@@ -21,6 +23,48 @@ class PITDataSource(DataSource):
 
     SNAPSHOT_TABLE = "pit.snapshot"
     OBS_TABLE = "pit.observations"
+
+    @staticmethod
+    def snapshot_query(
+        *,
+        columns: Sequence[str],
+        entities: Sequence[str] | None = None,
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+        asof: pd.Timestamp,
+        grid: str | None = None,
+    ) -> Query:
+        return Query(
+            table=PITDataSource.SNAPSHOT_TABLE,
+            columns=list(columns),
+            entities=list(entities) if entities is not None else None,
+            start=start,
+            end=end,
+            asof=asof,
+            vintage="latest",
+            grid=grid,
+        )
+
+    @staticmethod
+    def observations_query(
+        *,
+        columns: Sequence[str],
+        entities: Sequence[str] | None = None,
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+        asof: pd.Timestamp | None = None,
+        grid: str | None = None,
+    ) -> Query:
+        return Query(
+            table=PITDataSource.OBS_TABLE,
+            columns=list(columns),
+            entities=list(entities) if entities is not None else None,
+            start=start,
+            end=end,
+            asof=asof,
+            vintage="latest",
+            grid=grid,
+        )
 
     def schemas(self) -> dict[str, TableSchema]:
         return {
@@ -56,10 +100,36 @@ class PITDataSource(DataSource):
 
     def fetch(self, q: Query) -> pd.DataFrame:
         if q.table == self.SNAPSHOT_TABLE:
+            self._validate_snapshot_query(q)
             return self._fetch_snapshot(q)
         if q.table == self.OBS_TABLE:
+            self._validate_observations_query(q)
             return self._fetch_observations(q)
         raise KeyError(f"Unsupported PIT table: {q.table}")
+
+    @staticmethod
+    def _validate_snapshot_query(q: Query) -> None:
+        if q.asof is None:
+            raise PITContractError("pit.snapshot requires Query.asof.")
+        if q.vintage != "latest":
+            raise PITUnsupportedOperationError(
+                "pit.snapshot currently supports only Query.vintage='latest'."
+            )
+        if q.vintage_id is not None:
+            raise PITUnsupportedOperationError(
+                "pit.snapshot does not support Query.vintage_id yet."
+            )
+
+    @staticmethod
+    def _validate_observations_query(q: Query) -> None:
+        if q.vintage != "latest":
+            raise PITUnsupportedOperationError(
+                "pit.observations currently supports only Query.vintage='latest'."
+            )
+        if q.vintage_id is not None:
+            raise PITUnsupportedOperationError(
+                "pit.observations does not support Query.vintage_id yet."
+            )
 
     def _list_series_keys(self, entities: list[str] | None = None) -> list[str]:
         if entities is not None:
@@ -80,16 +150,16 @@ class PITDataSource(DataSource):
         return out[cols]
 
     def _fetch_snapshot(self, q: Query) -> pd.DataFrame:
-        if q.asof is None:
-            raise ValueError("pit.snapshot requires Query.asof.")
-
         keys = self._list_series_keys(
             [str(x) for x in q.entities] if q.entities is not None else None
         )
-        rows: list[dict] = []
+        rows: list[dict[str, object]] = []
 
         for series_key in keys:
             asof = q.asof
+            if asof is None:
+                raise PITContractError("pit.snapshot requires Query.asof.")
+
             if self.lag_policy is not None:
                 asof = effective_asof(asof, series_key, self.lag_policy)
 
@@ -162,10 +232,8 @@ class PITDataSource(DataSource):
 
         if q.asof is not None:
             if self.lag_policy is None:
-                cutoff = q.asof
-                out = out[out["asof_utc"] <= cutoff]
+                out = out[out["asof_utc"] <= q.asof]
             else:
-                # Per-series effective cutoff
                 cutoffs = out["entity_id"].map(
                     lambda s: effective_asof(q.asof, str(s), self.lag_policy)
                 )
