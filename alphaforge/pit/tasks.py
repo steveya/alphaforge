@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .accessor import PITAccessor, to_utc_aware, to_utc_naive
+from .exceptions import PITContractError
 
 
 @dataclass(frozen=True)
@@ -13,6 +14,14 @@ class RevisionStability:
     n_vintages: int
     total_abs_revision: float
     revision_std: float
+
+
+@dataclass(frozen=True)
+class RevisionEvent:
+    obs_date: pd.Timestamp
+    asof_utc: pd.Timestamp
+    value: float
+    delta: float
 
 
 def first_vintage_snapshot(
@@ -190,6 +199,97 @@ def revision_stability(
     return df
 
 
+def _obs_dates_for_series(
+    pit: PITAccessor,
+    series_key: str,
+    *,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+) -> pd.DatetimeIndex:
+    filters = ["series_key = ?"]
+    params: list[object] = [series_key]
+    if start is not None:
+        filters.append("obs_date >= ?")
+        params.append(to_utc_naive(start))
+    if end is not None:
+        filters.append("obs_date <= ?")
+        params.append(to_utc_naive(end))
+
+    where_clause = " AND ".join(filters)
+    df = pit.conn.execute(
+        f"""
+        SELECT DISTINCT obs_date
+        FROM pit_observations
+        WHERE {where_clause}
+        ORDER BY obs_date
+        """,
+        params,
+    ).fetchdf()
+    if df.empty:
+        return pd.DatetimeIndex([])
+    return pd.DatetimeIndex(to_utc_aware(df["obs_date"]))
+
+
+def revision_event_stream(
+    pit: PITAccessor,
+    series_key: str,
+    *,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    min_abs_change: float = 0.0,
+) -> pd.DataFrame:
+    """Return revision events across all obs_date timelines."""
+    if min_abs_change < 0:
+        raise PITContractError("min_abs_change must be >= 0.")
+
+    events: list[RevisionEvent] = []
+    for obs_date in _obs_dates_for_series(pit, series_key, start=start, end=end):
+        ev = revision_events(
+            pit,
+            series_key,
+            obs_date,
+            min_abs_change=min_abs_change,
+        )
+        if ev.empty:
+            continue
+        for row in ev.itertuples(index=False):
+            if pd.isna(row.delta):
+                continue
+            events.append(
+                RevisionEvent(
+                    obs_date=obs_date,
+                    asof_utc=pd.Timestamp(row.asof_utc),
+                    value=float(row.value),
+                    delta=float(row.delta),
+                )
+            )
+
+    if not events:
+        return pd.DataFrame(columns=["obs_date", "asof_utc", "value", "delta"])
+    out = pd.DataFrame([e.__dict__ for e in events])
+    return out.sort_values(["obs_date", "asof_utc"]).reset_index(drop=True)
+
+
+def revision_volatility(
+    pit: PITAccessor,
+    series_key: str,
+    *,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+) -> pd.Series:
+    """Compute standard deviation of revision deltas by obs_date."""
+    stability = revision_stability(pit, series_key, start=start, end=end)
+    if stability.empty:
+        return pd.Series(dtype="float64", name=f"{series_key}_revision_volatility")
+    out = pd.Series(
+        stability["revision_std"].to_numpy(dtype=float),
+        index=pd.DatetimeIndex(pd.to_datetime(stability["obs_date"], utc=True)),
+        name=f"{series_key}_revision_volatility",
+    )
+    out.index.name = "obs_date"
+    return out
+
+
 def forward_fill_with_staleness(
     snapshot: pd.Series,
     *,
@@ -219,6 +319,8 @@ def forward_fill_with_staleness(
     return pd.DataFrame(
         {
             "value": values,
+            "source_obs_date": pd.DatetimeIndex(last_source),
+            "age": age,
             "is_stale": is_stale,
             "age_days": age / pd.Timedelta(days=1),
         },

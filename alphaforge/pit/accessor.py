@@ -23,6 +23,7 @@ from .transforms import (
     PITEngineResolution,
     PITTransformResult,
     PITTransformSpec,
+    apply_binary_obs_path_transform,
     apply_obs_path_transform,
     apply_revision_path_transform,
     coerce_transform_spec,
@@ -415,7 +416,7 @@ class PITAccessor:
             [
                 transform_id,
                 spec.output_series_key,
-                json.dumps([spec.input_series_key]),
+                json.dumps(self._input_series_keys_for_spec(spec)),
                 spec.axis,
                 spec.op,
                 serialize_params_for_lineage(spec.sanitized_params()),
@@ -424,6 +425,15 @@ class PITAccessor:
                 to_utc_naive(pd.Timestamp.now("UTC")),
             ],
         )
+
+    @staticmethod
+    def _input_series_keys_for_spec(spec: PITTransformSpec) -> list[str]:
+        keys = [spec.input_series_key]
+        if spec.op == "binary":
+            right_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
+            if right_key:
+                keys.append(right_key)
+        return keys
 
     def _insert_transform_run(
         self,
@@ -502,10 +512,12 @@ class PITAccessor:
         spec: PITTransformSpec,
         engine_resolution: PITEngineResolution,
         source_asof: pd.Timestamp | None = None,
+        source_asof_by_series: Mapping[str, pd.Timestamp] | None = None,
     ) -> str:
         payload: dict[str, object] = {
             "transform_id": transform_id,
             "input_series_key": spec.input_series_key,
+            "input_series_keys": PITAccessor._input_series_keys_for_spec(spec),
             "op": spec.op,
             "axis": spec.axis,
             "engine": engine_resolution.engine_used,
@@ -518,7 +530,53 @@ class PITAccessor:
             payload["fallback_reason"] = engine_resolution.fallback_reason
         if source_asof is not None:
             payload["source_asof_utc"] = source_asof.isoformat()
+        if source_asof_by_series:
+            payload["source_asof_by_series_utc"] = {
+                key: ts.isoformat() for key, ts in source_asof_by_series.items()
+            }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _list_candidate_asofs_multi(
+        self,
+        series_keys: Sequence[str],
+        *,
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+    ) -> pd.DatetimeIndex:
+        unique_keys = sorted({str(k) for k in series_keys if str(k).strip()})
+        if not unique_keys:
+            return pd.DatetimeIndex([], tz="UTC")
+
+        placeholders = ", ".join(["?"] * len(unique_keys))
+        filters = [f"series_key IN ({placeholders})"]
+        params: list[object] = [*unique_keys]
+
+        if start_obs is not None:
+            filters.append("obs_date >= ?")
+            params.append(to_utc_naive(start_obs))
+        if end_obs is not None:
+            filters.append("obs_date <= ?")
+            params.append(to_utc_naive(end_obs))
+        if start_asof is not None:
+            filters.append("asof_utc >= ?")
+            params.append(to_utc_naive(start_asof))
+        if end_asof is not None:
+            filters.append("asof_utc <= ?")
+            params.append(to_utc_naive(end_asof))
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT DISTINCT asof_utc
+            FROM {_PIT_TABLE}
+            WHERE {where_clause}
+            ORDER BY asof_utc ASC
+        """
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return pd.DatetimeIndex([], tz="UTC")
+        return pd.DatetimeIndex(to_utc_aware(df["asof_utc"]))
 
     def _build_obs_path_rows(
         self,
@@ -532,43 +590,79 @@ class PITAccessor:
         transform_id: str,
         engine_resolution: PITEngineResolution,
     ) -> pd.DataFrame:
-        asof_values = self._list_candidate_asofs(
-            spec.input_series_key,
-            start_obs=start_obs,
-            end_obs=end_obs,
-            start_asof=start_asof,
-            end_asof=end_asof,
-        )
+        input_keys = self._input_series_keys_for_spec(spec)
+        if len(input_keys) == 1:
+            asof_values = self._list_candidate_asofs(
+                input_keys[0],
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+            )
+        else:
+            asof_values = self._list_candidate_asofs_multi(
+                input_keys,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+            )
         chunks: list[pd.DataFrame] = []
 
         start_obs_utc = to_utc_aware(start_obs) if start_obs is not None else None
         end_obs_utc = to_utc_aware(end_obs) if end_obs is not None else None
 
         for asof in asof_values:
-            source_asof = asof
-            if lag_policy is not None:
-                source_asof = effective_asof(source_asof, spec.input_series_key, lag_policy)
+            source_asof_by_series: dict[str, pd.Timestamp] = {}
+            for series_key in input_keys:
+                effective = asof
+                if lag_policy is not None:
+                    effective = effective_asof(effective, series_key, lag_policy)
+                if effective > asof:
+                    raise PITCausalityError(
+                        "Causality violation: effective source_asof is later than output asof. "
+                        f"series_key={series_key}, source_asof={effective}, output_asof={asof}"
+                    )
+                source_asof_by_series[series_key] = effective
 
-            if source_asof > asof:
-                raise PITCausalityError(
-                    "Causality violation: effective source_asof is later than output asof. "
-                    f"source_asof={source_asof}, output_asof={asof}"
+            if spec.op == "binary":
+                right_series_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
+                if not right_series_key:
+                    raise PITValidationError(
+                        "binary transform requires params['right_series_key']."
+                    )
+                left_snapshot = self.get_snapshot(
+                    spec.input_series_key,
+                    source_asof_by_series[spec.input_series_key],
+                    start=start_obs,
+                    end=end_obs,
                 )
+                right_snapshot = self.get_snapshot(
+                    right_series_key,
+                    source_asof_by_series[right_series_key],
+                    start=start_obs,
+                    end=end_obs,
+                )
+                transformed = apply_binary_obs_path_transform(
+                    left_snapshot,
+                    right_snapshot,
+                    spec,
+                ).dropna()
+            else:
+                snapshot = self.get_snapshot(
+                    spec.input_series_key,
+                    source_asof_by_series[spec.input_series_key],
+                    start=start_obs,
+                    end=end_obs,
+                )
+                if snapshot.empty:
+                    continue
+                transformed = apply_obs_path_transform(
+                    snapshot,
+                    spec,
+                    engine=engine_resolution.engine_used,
+                ).dropna()
 
-            snapshot = self.get_snapshot(
-                spec.input_series_key,
-                source_asof,
-                start=start_obs,
-                end=end_obs,
-            )
-            if snapshot.empty:
-                continue
-
-            transformed = apply_obs_path_transform(
-                snapshot,
-                spec,
-                engine=engine_resolution.engine_used,
-            ).dropna()
             if transformed.empty:
                 continue
 
@@ -583,7 +677,8 @@ class PITAccessor:
                 transform_id=transform_id,
                 spec=spec,
                 engine_resolution=engine_resolution,
-                source_asof=source_asof,
+                source_asof=source_asof_by_series.get(spec.input_series_key),
+                source_asof_by_series=source_asof_by_series,
             )
             chunks.append(
                 pd.DataFrame(

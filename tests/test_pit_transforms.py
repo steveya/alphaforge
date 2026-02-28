@@ -43,6 +43,38 @@ def _sample_df() -> pd.DataFrame:
     )
 
 
+def _sample_cross_series_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "series_key": [
+                "GDP",
+                "GDP",
+                "GDP",
+                "CPI",
+                "CPI",
+                "CPI",
+            ],
+            "obs_date": [
+                pd.Timestamp("2024-01-31"),
+                pd.Timestamp("2024-02-29"),
+                pd.Timestamp("2024-03-31"),
+                pd.Timestamp("2024-01-31"),
+                pd.Timestamp("2024-02-29"),
+                pd.Timestamp("2024-03-31"),
+            ],
+            "asof_utc": [
+                pd.Timestamp("2024-04-10", tz="UTC"),
+                pd.Timestamp("2024-04-10", tz="UTC"),
+                pd.Timestamp("2024-04-10", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+            ],
+            "value": [3.0, 3.5, 4.0, 1.0, 1.1, 1.2],
+        }
+    )
+
+
 def _sorted_obs_asof_values(df: pd.DataFrame) -> pd.DataFrame:
     out = df[["obs_date", "asof_utc", "value"]].copy()
     out["obs_date"] = pd.to_datetime(out["obs_date"], utc=True)
@@ -331,6 +363,89 @@ def test_engine_auto_revision_path_uses_duckdb_for_supported_op(tmp_path):
     assert result.engine_requested == "auto"
     assert result.engine_used == "duckdb"
     assert result.fallback_reason is None
+
+
+def test_cross_series_binary_transform_spread_and_lineage(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_cross_series_df())
+
+    spec = PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="GDP_minus_CPI",
+        op="binary",
+        params={
+            "right_series_key": "CPI",
+            "operator": "sub",
+            "join": "inner",
+        },
+    )
+
+    result = pit.apply_transform(spec, overwrite=True)
+    assert result.rows_written > 0
+    assert result.engine_used == "python"
+
+    out = pit.conn.execute(
+        """
+        SELECT obs_date, asof_utc, value, meta_json
+        FROM pit_observations
+        WHERE series_key = ?
+        ORDER BY obs_date, asof_utc
+        """,
+        ["GDP_minus_CPI"],
+    ).fetchdf()
+    assert not out.empty
+
+    expected = (
+        pit.get_snapshot("GDP", pd.Timestamp("2024-04-10", tz="UTC"))
+        - pit.get_snapshot("CPI", pd.Timestamp("2024-04-05", tz="UTC"))
+    ).dropna()
+    got = pd.Series(
+        out["value"].to_numpy(),
+        index=pd.to_datetime(out["obs_date"], utc=True),
+    ).sort_index()
+    pd.testing.assert_series_equal(got, expected.reindex(got.index), check_names=False)
+
+    meta = out.iloc[0]["meta_json"]
+    assert "source_asof_by_series_utc" in str(meta)
+    assert "right_series_key" in str(meta)
+
+    listed = pit.list_transforms("GDP_minus_CPI")
+    assert not listed.empty
+    assert '"CPI"' in str(listed.iloc[0]["input_series_keys_json"])
+
+
+def test_cross_series_binary_operator_validation(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_cross_series_df())
+
+    bad_spec = PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="BAD",
+        op="binary",
+        params={"right_series_key": "CPI", "operator": "pow"},
+    )
+    with pytest.raises(PITValidationError, match="binary requires params\\['operator'\\]"):
+        pit.apply_transform(bad_spec)
+
+
+def test_cross_series_binary_engine_contract(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_cross_series_df())
+
+    spec = PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="GDP_plus_CPI",
+        op="binary",
+        params={"right_series_key": "CPI", "operator": "add"},
+        engine="duckdb",
+    )
+
+    with pytest.raises(PITEngineError, match="not supported"):
+        pit.apply_transform(spec)
+
+    fallback_result = pit.apply_transform(spec, on_engine_mismatch="fallback")
+    assert fallback_result.engine_used == "python"
+    assert fallback_result.fallback_reason == "duckdb_unsupported_for_spec"
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added PIT cross-series `op="binary"` transforms (`add`/`sub`/`mul`/`div`) with deterministic lineage and causality-preserving execution.
+- Added cross-series transform lineage payloads with per-input source as-of timestamps and multi-input transform metadata.
+- Expanded PIT task utilities with `revision_event_stream(...)` and `revision_volatility(...)`.
+- Enhanced staleness helper output (`forward_fill_with_staleness`) with `source_obs_date` and `age`.
+- Added CI-verified runnable PIT docs examples (`tests/test_docs_pit_examples.py`) and a dedicated `docs-examples` CI job.
+- Added PR guard script (`scripts/check_pit_docs_sync.py`) and CI job to enforce PIT docs + changelog updates when PIT public interfaces change.
 - Added PIT typed exception hierarchy for deterministic contract/error handling.
 - Added strict PIT ingestion validation API (`PITValidationReport`, `validate_pit_observations`) and made strict validation the default for `upsert_pit_observations`.
 - Tightened transform parameter contracts with per-operator key validation and canonical normalization.

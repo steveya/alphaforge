@@ -8,8 +8,10 @@ from alphaforge.pit.tasks import (
     latest_vintage_snapshot,
     qoq,
     revision_deltas,
+    revision_event_stream,
     revision_events,
     revision_stability,
+    revision_volatility,
     snapshot_at_horizon,
     yoy,
 )
@@ -75,6 +77,14 @@ def test_vintage_selectors_and_revision_metrics(tmp_path):
     assert not stability.empty
     assert {"n_vintages", "total_abs_revision", "revision_std"}.issubset(stability.columns)
 
+    event_stream = revision_event_stream(pit, "GDP", min_abs_change=0.05)
+    assert not event_stream.empty
+    assert {"obs_date", "asof_utc", "value", "delta"}.issubset(event_stream.columns)
+
+    volatility = revision_volatility(pit, "GDP")
+    assert not volatility.empty
+    assert volatility.name == "GDP_revision_volatility"
+
 
 def test_staleness_and_growth_helpers():
     idx = pd.DatetimeIndex(
@@ -89,6 +99,7 @@ def test_staleness_and_growth_helpers():
         target_index=target,
     )
     assert "is_stale" in st.columns
+    assert {"source_obs_date", "age", "age_days"}.issubset(st.columns)
 
     monthly = pd.Series(
         [100, 105, 110, 120, 125, 130, 132, 136, 140, 145, 150, 155, 160],

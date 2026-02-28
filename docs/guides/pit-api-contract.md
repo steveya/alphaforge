@@ -22,17 +22,24 @@ Use these for deterministic handling in client code instead of parsing generic e
 
 Allowed operators by axis:
 
-- `obs_path`: `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `path_apply`
+- `obs_path`: `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `binary`, `path_apply`
 - `revision_path` (experimental): `rolling`, `expanding`, `lag`, `diff`
 
 Unknown parameter keys are rejected per operator.
+
+`binary` operator contract (`obs_path` only):
+
+- `right_series_key` (required)
+- `operator` in `add | sub | mul | div`
+- `join` in `inner | left | right | outer` (default `inner`)
+- optional `fill_value`
 
 ## Engine contract
 
 PIT transforms support two execution backends:
 
 - `duckdb`: built-ins (`resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`) with supported parameters
-- `python`: full v1 operator coverage (including `path_apply`)
+- `python`: full v1 operator coverage (including `path_apply` and `binary`)
 
 - `engine="auto"` -> uses `duckdb` for supported specs, otherwise `python`
 - `engine="python"` -> uses `python`

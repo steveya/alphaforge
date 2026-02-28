@@ -23,12 +23,15 @@ TransformOp = Literal[
     "expanding",
     "lag",
     "diff",
+    "binary",
     "path_apply",
 ]
 TransformEngine = Literal["auto", "duckdb", "python"]
 EngineMismatchPolicy = Literal["error", "fallback"]
 RuntimeEngine = Literal["duckdb", "python"]
 AggName = Literal["first", "last", "min", "max", "mean", "sum"]
+BinaryOperator = Literal["add", "sub", "mul", "div"]
+JoinMode = Literal["inner", "left", "right", "outer"]
 
 
 class ResampleParams(TypedDict, total=False):
@@ -60,6 +63,13 @@ class DiffParams(TypedDict, total=False):
     periods: int
 
 
+class BinaryParams(TypedDict, total=False):
+    right_series_key: str
+    operator: BinaryOperator
+    join: JoinMode
+    fill_value: float
+
+
 class PathApplyParams(TypedDict, total=False):
     udf_name: str
     func: Callable[[pd.Series], Any]
@@ -72,6 +82,7 @@ TransformParams = (
     | ExpandingParams
     | LagParams
     | DiffParams
+    | BinaryParams
     | PathApplyParams
     | dict[str, Any]
 )
@@ -84,6 +95,7 @@ _ALLOWED_AXIS_OPS: dict[TransformAxis, tuple[TransformOp, ...]] = {
         "expanding",
         "lag",
         "diff",
+        "binary",
         "path_apply",
     ),
     "revision_path": (
@@ -102,6 +114,7 @@ _ALLOWED_PARAM_KEYS: dict[TransformOp, set[str]] = {
     "expanding": {"min_periods", "agg"},
     "lag": {"periods"},
     "diff": {"periods"},
+    "binary": {"right_series_key", "operator", "join", "fill_value"},
     "path_apply": {"udf_name", "func"},
 }
 
@@ -271,6 +284,29 @@ def normalize_transform_params(
             raise PITValidationError(f"{op} requires params['periods'] > 0.")
         out["periods"] = periods
 
+    elif op == "binary":
+        right_series_key = str(params.get("right_series_key", "")).strip()
+        if not right_series_key:
+            raise PITValidationError("binary requires params['right_series_key'].")
+        out["right_series_key"] = right_series_key
+
+        operator = str(params.get("operator", "sub")).strip().lower()
+        if operator not in {"add", "sub", "mul", "div"}:
+            raise PITValidationError(
+                "binary requires params['operator'] in ['add', 'sub', 'mul', 'div']."
+            )
+        out["operator"] = operator
+
+        join = str(params.get("join", "inner")).strip().lower()
+        if join not in {"inner", "left", "right", "outer"}:
+            raise PITValidationError(
+                "binary requires params['join'] in ['inner', 'left', 'right', 'outer']."
+            )
+        out["join"] = join
+
+        if "fill_value" in params and params["fill_value"] is not None:
+            out["fill_value"] = float(params["fill_value"])
+
     elif op == "path_apply":
         udf_name = str(params.get("udf_name", "")).strip()
         if not udf_name:
@@ -318,7 +354,7 @@ def _is_duckdb_rule_supported(rule: str) -> bool:
 
 
 def duckdb_supports_spec(spec: PITTransformSpec) -> bool:
-    if spec.op == "path_apply":
+    if spec.op in {"path_apply", "binary"}:
         return False
 
     params = spec.normalized_params(include_callable=False)
@@ -538,6 +574,11 @@ def _apply_series_op_python(s: pd.Series, spec: PITTransformSpec) -> pd.Series:
             transformed = applied
         else:
             transformed = pd.Series(applied, index=s.index)
+    elif op == "binary":
+        raise PITUnsupportedOperationError(
+            "binary transform requires a left and right snapshot and must be applied "
+            "through PITAccessor.apply_transform."
+        )
 
     else:
         raise PITUnsupportedOperationError(f"Unsupported PIT transform op: {op}")
@@ -634,6 +675,10 @@ def _apply_series_op_duckdb(s: pd.Series, spec: PITTransformSpec) -> pd.Series:
                 GROUP BY 1
                 ORDER BY 1
             """
+    elif op == "binary":
+        raise PITUnsupportedOperationError(
+            "DuckDB series op for 'binary' is not supported in the single-series runner."
+        )
     else:
         raise PITUnsupportedOperationError(
             f"DuckDB engine does not support PIT op='{op}' for axis='{spec.axis}'."
@@ -662,6 +707,54 @@ def apply_obs_path_transform(
     if engine == "duckdb":
         return _apply_series_op_duckdb(s, spec)
     return _apply_series_op_python(s, spec)
+
+
+def apply_binary_obs_path_transform(
+    left_snapshot: pd.Series,
+    right_snapshot: pd.Series,
+    spec: PITTransformSpec,
+) -> pd.Series:
+    """Apply a binary transform over two obs_date-indexed PIT snapshots."""
+    if spec.axis != "obs_path":
+        raise PITContractError("apply_binary_obs_path_transform requires axis='obs_path'.")
+    if spec.op != "binary":
+        raise PITContractError("apply_binary_obs_path_transform requires op='binary'.")
+    validate_transform_spec(spec)
+
+    params = spec.normalized_params(include_callable=False)
+    operator = str(params["operator"])
+    join_mode = str(params["join"])
+    fill_value = params.get("fill_value")
+
+    left = _as_numeric(left_snapshot.copy().sort_index())
+    right = _as_numeric(right_snapshot.copy().sort_index())
+    left.index = _coerce_utc_index(left.index)
+    right.index = _coerce_utc_index(right.index)
+
+    left_aligned, right_aligned = left.align(right, join=join_mode)
+    if fill_value is not None:
+        left_aligned = left_aligned.fillna(float(fill_value))
+        right_aligned = right_aligned.fillna(float(fill_value))
+
+    if operator == "add":
+        out = left_aligned + right_aligned
+    elif operator == "sub":
+        out = left_aligned - right_aligned
+    elif operator == "mul":
+        out = left_aligned * right_aligned
+    elif operator == "div":
+        out = left_aligned / right_aligned
+        out = out.replace([float("inf"), float("-inf")], pd.NA)
+    else:
+        raise PITValidationError(
+            f"Unsupported binary operator '{operator}'. Expected one of: add, sub, mul, div."
+        )
+
+    out = pd.Series(out).sort_index()
+    out.index = _coerce_utc_index(out.index)
+    out = _as_numeric(out)
+    out.name = spec.output_series_key
+    return out
 
 
 def apply_revision_path_transform(
