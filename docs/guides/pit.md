@@ -1,17 +1,17 @@
-# Point-in-Time (PIT) data
+# Point-in-Time (PIT) Data
 
-Alphaforge supports revised macro series using a canonical Point-in-Time (PIT) table and two query views:
+Alphaforge supports revised macro series using a canonical PIT table and two query views:
 
-1. **Snapshot view**: a normal time series indexed by `obs_date`, as-of a cutoff time.
-2. **Revision timeline**: a series indexed by `asof_utc` that shows revisions for a single `obs_date`.
+1. Snapshot view: a normal series indexed by `obs_date`, as-of a cutoff time.
+2. Revision timeline: a series indexed by `asof_utc` for a single `obs_date`.
 
 ## Canonical PIT schema
 
-The PIT table is created automatically when you use a DuckDB-backed store (`DuckDBParquetStore`). It has the following schema:
+The PIT table is created automatically when using `DuckDBParquetStore`.
 
 | Column | Type | Notes |
 | --- | --- | --- |
-| series_key | TEXT | Series identifier (e.g., "GDP") |
+| series_key | TEXT | Series identifier (for example `"GDP"`) |
 | obs_date | TIMESTAMP | Reference period end date |
 | asof_utc | TIMESTAMP | Vintage / knowledge time |
 | value | DOUBLE | Observed value |
@@ -31,8 +31,8 @@ Input timestamps are normalized to timezone-aware UTC on ingestion. Snapshot and
 
 ```python
 import pandas as pd
-from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 from alphaforge.pit.accessor import PITAccessor
+from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 
 store = DuckDBParquetStore(root="./store")
 pit = PITAccessor(store.conn())
@@ -68,17 +68,19 @@ timeline = pit.get_revision_timeline("GDP", pd.Timestamp("2024-12-31", tz="UTC")
 PIT queries accept reference period keys that map to `obs_date` end timestamps (UTC midnight).
 
 Supported formats:
-- Annual: `YYYY` (e.g., `2025`)
-- Quarterly: `YYYYQq` (e.g., `2024Q4`)
-- Monthly: `YYYY-MM` or `YYYY/MM` (e.g., `2025-01`)
-- Month-end date: `YYYY-MM-DD` (interpreted as monthly, e.g., `2025-01-31`)
+
+- Annual: `YYYY` (example `2025`)
+- Quarterly: `YYYYQq` (example `2024Q4`)
+- Monthly: `YYYY-MM` or `YYYY/MM` (example `2025-01`)
+- Month-end date: `YYYY-MM-DD` (interpreted as monthly, example `2025-01-31`)
 
 Canonical formatting:
+
 - Annual: `YYYY`
 - Quarterly: `YYYYQq`
 - Monthly: `YYYY-MM`
 
-Example usage:
+Example:
 
 ```python
 timeline = pit.get_revision_timeline_ref("GDP", "2024Q4")
@@ -90,7 +92,8 @@ snapshot = pit.get_snapshot_ref(
 )
 ```
 
-Reference period keys map to the end of the observation period:
-- `2024Q4` → `2024-12-31 00:00:00+00:00`
-- `2025-01` → `2025-01-31 00:00:00+00:00`
-- `2025` → `2025-12-31 00:00:00+00:00`
+Reference period keys map to end-of-period timestamps:
+
+- `2024Q4` -> `2024-12-31 00:00:00+00:00`
+- `2025-01` -> `2025-01-31 00:00:00+00:00`
+- `2025` -> `2025-12-31 00:00:00+00:00`

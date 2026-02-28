@@ -17,6 +17,7 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
     "pyarrow>=14.0.1",
     "fredapi>=0.5.2",
+    "PyYAML>=6.0.1",
 ]
 
 [project.optional-dependencies]
@@ -26,15 +27,22 @@ dev = [
     "pre-commit>=3.7.0",
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "python-dotenv>=1.0.1",
     "ruff>=0.4.0",
     "twine>=5.0.0",
     "types-python-dateutil>=2.9.0.20240316",
     "types-requests>=2.31.0.20240406",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.28",
+    "griffe>=1.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/steveya/alphaforge"
-Documentation = "https://github.com/steveya/alphaforge"
+Documentation = "https://alphaforge.readthedocs.io/en/latest/"
 Issues = "https://github.com/steveya/alphaforge/issues"
 
 [tool.setuptools]
@@ -43,6 +51,8 @@ exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
 packages = [
   "alphaforge",
   "alphaforge.data",
+  "alphaforge.data.registries",
+  "alphaforge.data.public_web",
   "alphaforge.time",
   "alphaforge.store",
   "alphaforge.pit",
@@ -77,6 +87,9 @@ check_untyped_defs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --cov=alphaforge --cov-report=term-missing"
+markers = [
+  "network: tests that require live network access",
+]
 
 [tool.coverage.run]
 branch = true
