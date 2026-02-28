@@ -1,0 +1,16 @@
+- entity_id: "EUROSTAT:HICP:EA:CP00:IDX"
+  description: "Euro area headline HICP index"
+  dataset: "prc_hicp_midx"
+  filters:
+    geo: "EA20"
+    coicop: "CP00"
+    unit: "I15"
+    freq: "M"
+- entity_id: "EUROSTAT:HICP:DE:CP00:IDX"
+  description: "Germany headline HICP index"
+  dataset: "prc_hicp_midx"
+  filters:
+    geo: "DE"
+    coicop: "CP00"
+    unit: "I15"
+    freq: "M"

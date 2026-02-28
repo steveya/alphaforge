@@ -1,0 +1,14 @@
+- entity_id: "IBGE:IPCA:ALL_ITEMS:RATE"
+  description: "Brazil IPCA monthly rate"
+  table: "1737"
+  variable: "2266"
+  period: "all"
+  params:
+    geo: "1"
+- entity_id: "IBGE:IPCA:ALL_ITEMS:INDEX"
+  description: "Brazil IPCA all-items index"
+  table: "1737"
+  variable: "2265"
+  period: "all"
+  params:
+    geo: "1"

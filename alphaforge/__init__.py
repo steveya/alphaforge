@@ -2,6 +2,27 @@
 
 from .data.context import DataContext
 from .data.panel import PanelFrame
+from .data.pit_source import PITDataSource
+from .data.public_web import (
+    ANPFuelPricesDataSource,
+    B3HistoricalQuotesDataSource,
+    BCBSGSDataSource,
+    BEADataSource,
+    BLSDataSource,
+    CFTCWeeklySwapsSource,
+    CMEProductSlateSource,
+    DestatisGenesisDataSource,
+    DTCCPPDSource,
+    ECBSDMXDataSource,
+    ECWeeklyOilBulletinDataSource,
+    EIADataSource,
+    EurexRefdataContractsSource,
+    EurexStatsDailySource,
+    EurostatDataSource,
+    EzoicAdRevenueDailySource,
+    IBGESidraDataSource,
+    LCHCDSClearDailySource,
+)
 from .data.query import Query
 from .data.schema import TableSchema
 from .data.universe import EntityMetadata, Universe
@@ -10,7 +31,20 @@ from .features.ops import join_feature_frames, materialize
 from .features.realization import FeatureRealization, FitState
 from .features.template import FeatureTemplate, ParamSpec, SliceSpec
 from .pit.accessor import PITAccessor
+from .pit.guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
 from .pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
+from .pit.tasks import (
+    first_vintage_snapshot,
+    forward_fill_with_staleness,
+    latest_vintage_snapshot,
+    qoq,
+    revision_deltas,
+    revision_events,
+    revision_stability,
+    snapshot_at_horizon,
+    yoy,
+)
+from .pit.transforms import PITTransformResult, PITTransformSpec
 from .store.cache import MaterializationPolicy
 from .store.duckdb_parquet import DuckDBParquetStore
 from .time.align import AlignedPanel, AlignSpec, AvailabilityState, align_panel
@@ -23,6 +57,25 @@ __all__ = [
     "Query",
     "TableSchema",
     "PanelFrame",
+    "PITDataSource",
+    "BLSDataSource",
+    "BEADataSource",
+    "EIADataSource",
+    "EurostatDataSource",
+    "ECBSDMXDataSource",
+    "DestatisGenesisDataSource",
+    "ECWeeklyOilBulletinDataSource",
+    "IBGESidraDataSource",
+    "BCBSGSDataSource",
+    "ANPFuelPricesDataSource",
+    "B3HistoricalQuotesDataSource",
+    "DTCCPPDSource",
+    "CMEProductSlateSource",
+    "CFTCWeeklySwapsSource",
+    "EurexStatsDailySource",
+    "EurexRefdataContractsSource",
+    "LCHCDSClearDailySource",
+    "EzoicAdRevenueDailySource",
     "Universe",
     "EntityMetadata",
     "TradingCalendar",
@@ -48,6 +101,20 @@ __all__ = [
     "DuckDBParquetStore",
     "join_feature_frames",
     "PITAccessor",
+    "PITTransformSpec",
+    "PITTransformResult",
+    "ReleaseLagPolicy",
+    "effective_asof",
+    "pit_leakage_report",
+    "first_vintage_snapshot",
+    "latest_vintage_snapshot",
+    "snapshot_at_horizon",
+    "revision_deltas",
+    "revision_events",
+    "revision_stability",
+    "forward_fill_with_staleness",
+    "yoy",
+    "qoq",
     "make_ref_entity_id",
     "parse_ref_entity_id",
 ]

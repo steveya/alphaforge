@@ -1,0 +1,16 @@
+- entity_id: "BEA:NIPA:T20804:L2:M:PCEPI"
+  description: "PCE price index"
+  params:
+    datasetname: "NIPA"
+    TableName: "T20804"
+    LineNumber: "2"
+    Frequency: "M"
+    Year: "ALL"
+- entity_id: "BEA:NIPA:T20804:L3:M:COREPCE"
+  description: "Core PCE price index"
+  params:
+    datasetname: "NIPA"
+    TableName: "T20804"
+    LineNumber: "3"
+    Frequency: "M"
+    Year: "ALL"

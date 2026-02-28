@@ -1,0 +1,3 @@
+Date,Currency,Maturity_Bucket,Metric,Participant_Type,Value
+2026-01-02,USD,2y5y,notional_sum,dealer,123456
+2026-01-09,USD,2y5y,notional_sum,asset_manager,234567

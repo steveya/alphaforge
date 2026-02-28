@@ -1,9 +1,10 @@
 # Point-in-Time (PIT) Data
 
-Alphaforge supports revised macro series using a canonical PIT table and two query views:
+Alphaforge supports revised macro series using a canonical PIT table and three layers:
 
-1. Snapshot view: a normal series indexed by `obs_date`, as-of a cutoff time.
-2. Revision timeline: a series indexed by `asof_utc` for a single `obs_date`.
+1. Snapshot and revision-timeline retrieval (`PITAccessor`)
+2. PIT-preserving transforms (`apply_transform`)
+3. PIT safety and integration (`ReleaseLagPolicy`, `PITDataSource`)
 
 ## Canonical PIT schema
 
@@ -27,7 +28,7 @@ Uniqueness is enforced on `(series_key, obs_date, asof_utc)`.
 
 Input timestamps are normalized to timezone-aware UTC on ingestion. Snapshot and revision queries return UTC indexes.
 
-## Usage
+## Core usage
 
 ```python
 import pandas as pd
@@ -37,48 +38,122 @@ from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 store = DuckDBParquetStore(root="./store")
 pit = PITAccessor(store.conn())
 
-df = pd.DataFrame(
-    {
-        "series_key": ["GDP", "GDP", "GDP", "GDP"],
-        "obs_date": [
-            pd.Timestamp("2024-09-30"),
-            pd.Timestamp("2024-09-30"),
-            pd.Timestamp("2024-12-31"),
-            pd.Timestamp("2024-12-31"),
-        ],
-        "asof_utc": [
-            pd.Timestamp("2024-11-15", tz="UTC"),
-            pd.Timestamp("2024-12-20", tz="UTC"),
-            pd.Timestamp("2025-02-15", tz="UTC"),
-            pd.Timestamp("2025-03-28", tz="UTC"),
-        ],
-        "value": [100.0, 101.0, 200.0, 202.0],
-        "source": ["alfred"] * 4,
-    }
+pit.upsert_pit_observations(
+    pd.DataFrame(
+        {
+            "series_key": ["GDP", "GDP"],
+            "obs_date": [pd.Timestamp("2024-12-31"), pd.Timestamp("2024-12-31")],
+            "asof_utc": [
+                pd.Timestamp("2025-01-10", tz="UTC"),
+                pd.Timestamp("2025-02-10", tz="UTC"),
+            ],
+            "value": [1.0, 1.1],
+        }
+    )
 )
 
-pit.upsert_pit_observations(df)
-
-snapshot = pit.get_snapshot("GDP", pd.Timestamp("2025-01-01", tz="UTC"))
+snapshot = pit.get_snapshot("GDP", pd.Timestamp("2025-02-15", tz="UTC"))
 timeline = pit.get_revision_timeline("GDP", pd.Timestamp("2024-12-31", tz="UTC"))
 ```
 
+## Transform API (obs_path)
+
+`PITAccessor.apply_transform` creates derived PIT series while preserving as-of causality.
+
+```python
+from alphaforge.pit.transforms import PITTransformSpec
+
+spec = PITTransformSpec(
+    input_series_key="GDP",
+    output_series_key="GDP_q_last",
+    axis="obs_path",
+    op="resample",
+    params={"rule": "Q", "agg": "last"},
+)
+
+result = pit.apply_transform(spec, overwrite=True)
+print(result.transform_id, result.rows_written)
+```
+
+Supported `obs_path` operators:
+
+- `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `path_apply`
+
+## Experimental transform API (`revision_path`)
+
+`revision_path` is experimental in this release and currently supports:
+
+- `diff`, `lag`, `rolling`, `expanding`
+
+```python
+spec = PITTransformSpec(
+    input_series_key="GDP",
+    output_series_key="GDP_revision_delta",
+    axis="revision_path",
+    op="diff",
+    params={"periods": 1},
+)
+pit.apply_transform(spec, overwrite=True)
+```
+
+For `revision_path`, transforms run along each `(series_key, obs_date)` revision timeline ordered by `asof_utc`.
+
+## Lag policy and leakage guards
+
+```python
+from alphaforge.pit.guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
+
+policy = ReleaseLagPolicy(default_lag=pd.Timedelta(days=30))
+cutoff = effective_asof(pd.Timestamp("2025-04-15", tz="UTC"), "GDP", policy)
+
+report = pit_leakage_report(
+    pd.DataFrame(
+        {
+            "series_key": ["GDP"],
+            "obs_date": [pd.Timestamp("2025-03-31", tz="UTC")],
+            "asof_utc": [pd.Timestamp("2025-04-15", tz="UTC")],
+            "value": [2.1],
+        }
+    )
+)
+```
+
+## Dataset integration via PITDataSource
+
+```python
+from alphaforge.data.context import DataContext
+from alphaforge.data.pit_source import PITDataSource
+from alphaforge.data.query import Query
+
+pit_source = PITDataSource(pit=pit, lag_policy=policy)
+ctx = DataContext(sources={"pit": pit_source}, calendars={}, store=store)
+
+panel = ctx.fetch_panel(
+    "pit",
+    Query(
+        table="pit.snapshot",
+        columns=["value", "asof_utc"],
+        entities=["GDP_q_last"],
+        asof=pd.Timestamp("2025-06-01", tz="UTC"),
+    ),
+)
+```
+
+Tables exposed by `PITDataSource`:
+
+- `pit.snapshot`: latest-leq snapshot view (`Query.asof` required)
+- `pit.observations`: raw vintage rows with optional as-of filtering
+
 ## Reference period keys
 
-PIT queries accept reference period keys that map to `obs_date` end timestamps (UTC midnight).
+PIT ref helpers map keys to `obs_date` end timestamps (UTC midnight).
 
 Supported formats:
 
-- Annual: `YYYY` (example `2025`)
-- Quarterly: `YYYYQq` (example `2024Q4`)
-- Monthly: `YYYY-MM` or `YYYY/MM` (example `2025-01`)
-- Month-end date: `YYYY-MM-DD` (interpreted as monthly, example `2025-01-31`)
-
-Canonical formatting:
-
 - Annual: `YYYY`
 - Quarterly: `YYYYQq`
-- Monthly: `YYYY-MM`
+- Monthly: `YYYY-MM` or `YYYY/MM`
+- Month-end date: `YYYY-MM-DD` (interpreted as monthly)
 
 Example:
 
@@ -91,9 +166,3 @@ snapshot = pit.get_snapshot_ref(
     end_ref="2024Q4",
 )
 ```
-
-Reference period keys map to end-of-period timestamps:
-
-- `2024Q4` -> `2024-12-31 00:00:00+00:00`
-- `2025-01` -> `2025-01-31 00:00:00+00:00`
-- `2025` -> `2025-12-31 00:00:00+00:00`

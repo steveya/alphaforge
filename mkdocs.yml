@@ -49,6 +49,10 @@ nav:
       - Dataset Builder: api/dataset-builder.md
       - Dataset Spec: api/dataset-spec.md
       - PIT Accessor: api/pit-accessor.md
+      - PIT Transforms: api/pit-transforms.md
+      - PIT Guards: api/pit-guards.md
+      - PIT Tasks: api/pit-tasks.md
+      - PIT Data Source: api/pit-source.md
       - Stores: api/stores.md
       - Public Web: api/public-web.md
   - Changelog: changelog.md

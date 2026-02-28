@@ -1,0 +1,12 @@
+- entity_id: "DESTATIS:CPI:ALL_ITEMS:IDX"
+  description: "Germany CPI all items index"
+  table_code: "61111-0001"
+  params:
+    name: "data"
+    format: "json"
+- entity_id: "DESTATIS:HICP:ALL_ITEMS:IDX"
+  description: "Germany HICP all items index"
+  table_code: "61111-0002"
+  params:
+    name: "data"
+    format: "json"

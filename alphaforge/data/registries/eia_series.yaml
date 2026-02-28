@@ -1,0 +1,15 @@
+- entity_id: "EIA:CRUDE:WTI:SPOT_D"
+  description: "WTI spot price daily"
+  route: "petroleum/pri/spt"
+  params:
+    frequency: "daily"
+    data:
+      - "value"
+    facets[product][]: "EPCWTI"
+- entity_id: "EIA:GASOLINE:US:W"
+  description: "US regular gasoline retail price weekly"
+  route: "petroleum/pri/gnd"
+  params:
+    frequency: "weekly"
+    data:
+      - "value"

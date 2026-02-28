@@ -1,0 +1,6 @@
+- entity_id: "ECB:HICP:EA:CP00:IDX"
+  description: "EA HICP monthly index"
+  flowRef: "ICP"
+  key: "M.U2.N.000000.4.INX"
+  params:
+    format: "csvdata"

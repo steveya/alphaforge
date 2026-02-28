@@ -1,8 +1,20 @@
+from importlib.util import find_spec
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from alphaforge.features.frame import FeatureFrame
 from alphaforge.store.duckdb_parquet import DuckDBParquetStore
+
+_PARQUET_ENGINE_AVAILABLE = (
+    find_spec("pyarrow") is not None or find_spec("fastparquet") is not None
+)
+
+pytestmark = pytest.mark.skipif(
+    not _PARQUET_ENGINE_AVAILABLE,
+    reason="pyarrow or fastparquet is required for parquet roundtrip tests",
+)
 
 
 def test_duckdb_store_roundtrip(tmp_path):

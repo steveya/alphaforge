@@ -1,0 +1,13 @@
+[
+    {
+        "symbol": "FGBL",
+        "product_name": "Euro-Bund Futures",
+        "product_group": "Rates",
+        "currency": "EUR",
+        "expiry_date": "2026-06-10",
+        "underlying": "Bund",
+        "multiplier": 1000,
+        "tick_size": 0.01,
+        "isin": "DE0001234567"
+    }
+]
