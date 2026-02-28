@@ -16,6 +16,18 @@ PIT_DOC_PREFIXES = (
     "mkdocs.yml",
 )
 
+PIT_CONTRACT_AFFECTING_PREFIXES = (
+    "alphaforge/pit/accessor.py",
+    "alphaforge/pit/validation.py",
+    "alphaforge/pit/contract.py",
+    "alphaforge/pit/models.py",
+)
+
+PIT_CONTRACT_DOC_FILES = {
+    "docs/guides/pit-api-contract.md",
+    "docs/guides/pit-migrations.md",
+}
+
 CHANGELOG_FILES = {"CHANGELOG.md", "docs/changelog.md"}
 
 
@@ -46,8 +58,15 @@ def main(argv: list[str]) -> int:
         any(path.startswith(prefix) for prefix in PIT_DOC_PREFIXES) for path in changed_files
     )
     changelog_changed = any(path in CHANGELOG_FILES for path in changed_files)
+    pit_contract_code_changed = any(
+        any(path.startswith(prefix) for prefix in PIT_CONTRACT_AFFECTING_PREFIXES)
+        for path in changed_files
+    )
+    pit_contract_docs_changed = all(path in changed_files for path in PIT_CONTRACT_DOC_FILES)
 
-    if pit_docs_changed and changelog_changed:
+    if pit_docs_changed and changelog_changed and (
+        not pit_contract_code_changed or pit_contract_docs_changed
+    ):
         print("PIT docs sync guard passed.")
         return 0
 
@@ -56,6 +75,8 @@ def main(argv: list[str]) -> int:
         missing.append("PIT guide/API docs updates")
     if not changelog_changed:
         missing.append("CHANGELOG updates")
+    if pit_contract_code_changed and not pit_contract_docs_changed:
+        missing.append("PIT contract+migration docs updates")
 
     print(
         "PIT docs sync guard failed: public PIT code changed without required docs/changelog "

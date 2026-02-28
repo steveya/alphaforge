@@ -1,4 +1,5 @@
 from .accessor import PITAccessor, ensure_pit_table
+from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
 from .exceptions import (
     PITCausalityError,
     PITContractError,
@@ -7,8 +8,19 @@ from .exceptions import (
     PITExperimentalFeatureError,
     PITUnsupportedOperationError,
     PITValidationError,
+    PITValidationWarning,
 )
 from .guards import ReleaseLagPolicy, effective_asof, pit_leakage_report
+from .models import (
+    PITExpressionGraphResult,
+    PITExpressionGraphSpec,
+    PITExpressionNode,
+    ReleaseRecord,
+    ReleaseSelectionPolicy,
+    SnapshotSeriesSpec,
+    coerce_expression_graph_spec,
+    coerce_snapshot_series_spec,
+)
 from .pipelines import (
     PITPipelineResult,
     PITPipelineSpec,
@@ -42,12 +54,24 @@ __all__ = [
     "PITExperimentalFeatureError",
     "PITCausalityError",
     "PITEngineError",
+    "PITValidationWarning",
     "PITTransformSpec",
     "PITTransformResult",
     "PITPipelineStep",
     "PITPipelineSpec",
     "PITPipelineResult",
     "coerce_pipeline_spec",
+    "PITExpressionNode",
+    "PITExpressionGraphSpec",
+    "PITExpressionGraphResult",
+    "coerce_expression_graph_spec",
+    "ReleaseSelectionPolicy",
+    "ReleaseRecord",
+    "SnapshotSeriesSpec",
+    "coerce_snapshot_series_spec",
+    "PITContractVersion",
+    "PIT_CONTRACT_VERSION",
+    "get_pit_contract_version",
     "PITValidationReport",
     "validate_pit_observations",
     "ReleaseLagPolicy",

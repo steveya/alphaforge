@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import ast
+import hashlib
 import json
 import uuid
+import warnings
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
 import duckdb
 import pandas as pd
+from pandas.tseries.offsets import MonthEnd
 
 from alphaforge.time.ref_period import RefFreq, RefPeriod
 
@@ -16,8 +20,20 @@ from .exceptions import (
     PITExperimentalFeatureError,
     PITUnsupportedOperationError,
     PITValidationError,
+    PITValidationWarning,
 )
 from .guards import ReleaseLagPolicy, effective_asof
+from .models import (
+    PITExpressionGraphResult,
+    PITExpressionGraphSpec,
+    PITExpressionNode,
+    ReleaseRecord,
+    ReleaseSelectionPolicy,
+    SnapshotSeriesSpec,
+    coerce_expression_graph_spec,
+    coerce_snapshot_series_spec,
+    normalize_release_selection_policy,
+)
 from .pipelines import (
     PITPipelineResult,
     PITPipelineSpec,
@@ -43,6 +59,8 @@ _PIT_TRANSFORMS_TABLE = "pit_transforms"
 _PIT_TRANSFORM_RUNS_TABLE = "pit_transform_runs"
 _PIT_PIPELINES_TABLE = "pit_pipelines"
 _PIT_PIPELINE_RUNS_TABLE = "pit_pipeline_runs"
+_PIT_EXPR_GRAPHS_TABLE = "pit_expression_graphs"
+_PIT_EXPR_GRAPH_RUNS_TABLE = "pit_expression_graph_runs"
 
 
 def to_utc_naive(value):
@@ -198,6 +216,55 @@ def ensure_pit_table(conn: duckdb.DuckDBPyConnection) -> None:
         """
     )
 
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_PIT_EXPR_GRAPHS_TABLE} (
+            graph_id TEXT PRIMARY KEY,
+            spec_hash TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            description TEXT,
+            created_utc TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """
+    )
+
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {_PIT_EXPR_GRAPH_RUNS_TABLE} (
+            run_id TEXT PRIMARY KEY,
+            graph_id TEXT NOT NULL,
+            start_obs TIMESTAMP,
+            end_obs TIMESTAMP,
+            start_asof TIMESTAMP,
+            end_asof TIMESTAMP,
+            incremental BOOLEAN NOT NULL,
+            requested_since_asof TIMESTAMP,
+            effective_start_asof TIMESTAMP,
+            requested_since_run_id TEXT,
+            max_output_asof TIMESTAMP,
+            rows_written BIGINT NOT NULL,
+            node_count INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            started_utc TIMESTAMP NOT NULL,
+            finished_utc TIMESTAMP NOT NULL
+        );
+        """
+    )
+
+    conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS pit_expression_graph_runs_graph_id
+        ON {_PIT_EXPR_GRAPH_RUNS_TABLE}(graph_id, started_utc);
+        """
+    )
+
+    conn.execute(
+        f"""
+        ALTER TABLE {_PIT_EXPR_GRAPH_RUNS_TABLE}
+        ADD COLUMN IF NOT EXISTS max_output_asof TIMESTAMP
+        """
+    )
+
 
 def _normalize_datetime_columns(
     df: pd.DataFrame, columns: Sequence[str]
@@ -210,6 +277,241 @@ def _normalize_datetime_columns(
     return out
 
 
+def _resolve_ingestion_policy(strict: bool | str) -> Literal["error", "warn", "coerce"]:
+    if isinstance(strict, bool):
+        return "error" if strict else "warn"
+    mode = str(strict).strip().lower()
+    if mode not in {"error", "warn", "coerce"}:
+        raise PITContractError(
+            "strict must be bool or one of {'error', 'warn', 'coerce'}."
+        )
+    return mode  # type: ignore[return-value]
+
+
+def _coerce_pit_observations(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["__input_order"] = range(len(out))
+
+    required = ["series_key", "obs_date", "asof_utc", "value"]
+    for col in required:
+        if col not in out.columns:
+            raise PITContractError(f"Missing required columns: {sorted({col})}")
+
+    out["obs_date"] = pd.to_datetime(out["obs_date"], errors="coerce", utc=True)
+    out["asof_utc"] = pd.to_datetime(out["asof_utc"], errors="coerce", utc=True)
+    if "release_time_utc" in out.columns:
+        out["release_time_utc"] = pd.to_datetime(
+            out["release_time_utc"], errors="coerce", utc=True
+        )
+    if "ingested_utc" in out.columns:
+        out["ingested_utc"] = pd.to_datetime(out["ingested_utc"], errors="coerce", utc=True)
+
+    # Null required rows after coercion are irrecoverable and removed deterministically.
+    out = out.dropna(subset=required)
+
+    # Drop PIT-future rows (obs date known after its as-of timestamp).
+    out = out[out["obs_date"] <= out["asof_utc"]]
+
+    # Keep the last input row for duplicate PIT keys.
+    out = out.sort_values("__input_order")
+    out = out.drop_duplicates(subset=["series_key", "obs_date", "asof_utc"], keep="last")
+    out = out.sort_values("__input_order").drop(columns=["__input_order"]).reset_index(drop=True)
+    return out
+
+
+def _expression_hash(expression: str) -> str:
+    return hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+
+
+def _ensure_utc_index(idx: pd.Index) -> pd.DatetimeIndex:
+    out = pd.DatetimeIndex(pd.to_datetime(idx))
+    return out.tz_localize("UTC") if out.tz is None else out.tz_convert("UTC")
+
+
+def _coerce_series_numeric(s: pd.Series) -> pd.Series:
+    out = pd.to_numeric(pd.Series(s).copy(), errors="coerce")
+    out.index = _ensure_utc_index(out.index)
+    return out.sort_index()
+
+
+def _validate_expression_ast(
+    node: ast.AST,
+    aliases: set[str],
+) -> None:
+    if isinstance(node, ast.Expression):
+        _validate_expression_ast(node.body, aliases)
+        return
+
+    if isinstance(node, ast.BinOp):
+        if not isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+            raise PITValidationError("Expression supports only +, -, *, /.")  # pragma: no cover
+        _validate_expression_ast(node.left, aliases)
+        _validate_expression_ast(node.right, aliases)
+        return
+
+    if isinstance(node, ast.UnaryOp):
+        if not isinstance(node.op, (ast.UAdd, ast.USub)):
+            raise PITValidationError("Expression unary operators support only + and -.")
+        _validate_expression_ast(node.operand, aliases)
+        return
+
+    if isinstance(node, ast.Name):
+        if node.id not in aliases:
+            raise PITValidationError(f"Unknown expression alias: '{node.id}'.")
+        return
+
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise PITValidationError("Expression call must use a simple function name.")
+        if node.func.id not in {"lag", "diff"}:
+            raise PITValidationError("Expression supports only lag(alias, n) and diff(alias, n).")
+        if len(node.args) != 2:
+            raise PITValidationError(
+                f"Expression function '{node.func.id}' expects exactly 2 arguments."
+            )
+        arg0 = node.args[0]
+        arg1 = node.args[1]
+        if not isinstance(arg0, ast.Name) or arg0.id not in aliases:
+            raise PITValidationError(
+                f"Expression function '{node.func.id}' first argument must be an input alias."
+            )
+        if not isinstance(arg1, ast.Constant) or not isinstance(arg1.value, int):
+            raise PITValidationError(
+                f"Expression function '{node.func.id}' second argument must be an integer."
+            )
+        if int(arg1.value) <= 0:
+            raise PITValidationError(
+                f"Expression function '{node.func.id}' periods must be > 0."
+            )
+        return
+
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)):
+            return
+        raise PITValidationError("Expression constants must be numeric.")
+
+    raise PITValidationError("Expression contains unsupported syntax.")
+
+
+def _eval_expression_ast(
+    node: ast.AST,
+    env: Mapping[str, pd.Series],
+    *,
+    join: Literal["inner", "left", "right", "outer"],
+    fill_value: float | None,
+) -> pd.Series | float:
+    if isinstance(node, ast.Expression):
+        return _eval_expression_ast(node.body, env, join=join, fill_value=fill_value)
+
+    if isinstance(node, ast.Name):
+        return _coerce_series_numeric(env[node.id])
+
+    if isinstance(node, ast.Constant):
+        return float(node.value)
+
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_expression_ast(node.operand, env, join=join, fill_value=fill_value)
+        if isinstance(value, pd.Series):
+            return value if isinstance(node.op, ast.UAdd) else -value
+        return value if isinstance(node.op, ast.UAdd) else -float(value)
+
+    if isinstance(node, ast.Call):
+        func_name = str(node.func.id)  # type: ignore[union-attr]
+        alias = str(node.args[0].id)  # type: ignore[union-attr]
+        periods = int(node.args[1].value)  # type: ignore[union-attr]
+        base = _coerce_series_numeric(env[alias])
+        if func_name == "lag":
+            return base.shift(periods=periods)
+        if func_name == "diff":
+            return base.diff(periods=periods)
+        raise PITValidationError(f"Unsupported expression function '{func_name}'.")
+
+    if isinstance(node, ast.BinOp):
+        left = _eval_expression_ast(node.left, env, join=join, fill_value=fill_value)
+        right = _eval_expression_ast(node.right, env, join=join, fill_value=fill_value)
+
+        if isinstance(left, pd.Series) and isinstance(right, pd.Series):
+            left_aligned, right_aligned = left.align(right, join=join)
+            if fill_value is not None:
+                left_aligned = left_aligned.fillna(float(fill_value))
+                right_aligned = right_aligned.fillna(float(fill_value))
+            if isinstance(node.op, ast.Add):
+                out = left_aligned + right_aligned
+            elif isinstance(node.op, ast.Sub):
+                out = left_aligned - right_aligned
+            elif isinstance(node.op, ast.Mult):
+                out = left_aligned * right_aligned
+            elif isinstance(node.op, ast.Div):
+                out = left_aligned / right_aligned
+                out = out.replace([float("inf"), float("-inf")], pd.NA)
+            else:  # pragma: no cover
+                raise PITValidationError("Unsupported expression binary operator.")
+            return pd.Series(out)
+
+        if isinstance(left, pd.Series):
+            right_num = float(right)
+            if fill_value is not None:
+                left = left.fillna(float(fill_value))
+            if isinstance(node.op, ast.Add):
+                return left + right_num
+            if isinstance(node.op, ast.Sub):
+                return left - right_num
+            if isinstance(node.op, ast.Mult):
+                return left * right_num
+            if isinstance(node.op, ast.Div):
+                out = left / right_num
+                return out.replace([float("inf"), float("-inf")], pd.NA)
+            raise PITValidationError("Unsupported expression binary operator.")  # pragma: no cover
+
+        if isinstance(right, pd.Series):
+            left_num = float(left)
+            if fill_value is not None:
+                right = right.fillna(float(fill_value))
+            if isinstance(node.op, ast.Add):
+                return left_num + right
+            if isinstance(node.op, ast.Sub):
+                return left_num - right
+            if isinstance(node.op, ast.Mult):
+                return left_num * right
+            if isinstance(node.op, ast.Div):
+                out = left_num / right
+                return out.replace([float("inf"), float("-inf")], pd.NA)
+            raise PITValidationError("Unsupported expression binary operator.")  # pragma: no cover
+
+        left_num = float(left)
+        right_num = float(right)
+        if isinstance(node.op, ast.Add):
+            return left_num + right_num
+        if isinstance(node.op, ast.Sub):
+            return left_num - right_num
+        if isinstance(node.op, ast.Mult):
+            return left_num * right_num
+        if isinstance(node.op, ast.Div):
+            return left_num / right_num
+        raise PITValidationError("Unsupported expression binary operator.")  # pragma: no cover
+
+    raise PITValidationError("Expression contains unsupported syntax.")  # pragma: no cover
+
+
+def _evaluate_expression_series(
+    expression: str,
+    env: Mapping[str, pd.Series],
+    *,
+    join: Literal["inner", "left", "right", "outer"],
+    fill_value: float | None,
+) -> pd.Series:
+    try:
+        parsed = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise PITValidationError(f"Invalid expression syntax: {exc.msg}") from exc
+    _validate_expression_ast(parsed, set(env.keys()))
+    out = _eval_expression_ast(parsed, env, join=join, fill_value=fill_value)
+    if not isinstance(out, pd.Series):
+        raise PITValidationError("Expression must resolve to a series output.")
+    out = _coerce_series_numeric(out).sort_index()
+    return out
+
+
 @dataclass
 class PITAccessor:
     conn: duckdb.DuckDBPyConnection
@@ -217,18 +519,55 @@ class PITAccessor:
     def __post_init__(self) -> None:
         ensure_pit_table(self.conn)
 
-    def upsert_pit_observations(self, df: pd.DataFrame, *, strict: bool = True) -> None:
+    def upsert_pit_observations(
+        self,
+        df: pd.DataFrame,
+        *,
+        strict: bool | Literal["error", "warn", "coerce"] = True,
+    ) -> None:
+        policy = _resolve_ingestion_policy(strict)
         report = validate_pit_observations(df)
         if report.missing_required_columns:
             raise PITContractError(
                 f"Missing required columns: {sorted(report.missing_required_columns)}"
             )
 
-        if strict and report.has_errors:
+        if policy == "error" and report.has_errors:
             raise PITValidationError(report.to_error_message())
 
+        if policy == "warn" and report.has_errors:
+            warnings.warn(
+                f"PIT validation warning: {report.to_error_message()}",
+                PITValidationWarning,
+                stacklevel=2,
+            )
+
+        incoming = df
+        if policy == "coerce":
+            incoming = _coerce_pit_observations(df)
+            repaired_report = validate_pit_observations(incoming)
+            if repaired_report.missing_required_columns:
+                raise PITContractError(
+                    f"Missing required columns: {sorted(repaired_report.missing_required_columns)}"
+                )
+            if repaired_report.has_errors:
+                raise PITValidationError(
+                    "strict='coerce' failed to repair all PIT validation issues: "
+                    f"{repaired_report.to_error_message()}"
+                )
+
+            dropped_rows = int(len(df) - len(incoming))
+            if report.has_errors or dropped_rows > 0:
+                detail = report.to_error_message() if report.has_errors else "none"
+                warnings.warn(
+                    "PIT validation warning: strict='coerce' repaired input rows "
+                    f"(dropped_rows={dropped_rows}, original_issues={detail}).",
+                    PITValidationWarning,
+                    stacklevel=2,
+                )
+
         normalized = _normalize_datetime_columns(
-            df, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
+            incoming, ["obs_date", "asof_utc", "release_time_utc", "ingested_utc"]
         )
         if "ingested_utc" not in normalized.columns:
             normalized["ingested_utc"] = to_utc_naive(pd.Timestamp.now("UTC"))
@@ -402,6 +741,284 @@ class PITAccessor:
         start_ts = _resolve(start_ref)
         end_ts = _resolve(end_ref)
         return self.get_snapshot(series_key, asof, start=start_ts, end=end_ts)
+
+    @staticmethod
+    def _resolve_ref_period(ref: str | RefPeriod, freq: RefFreq | None = None) -> RefPeriod:
+        ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
+        if freq is not None and freq != ref_period.freq:
+            raise PITContractError("Reference period frequency does not match requested freq.")
+        return ref_period
+
+    def list_release_stream(
+        self,
+        series_key: str,
+        ref: str | RefPeriod,
+        asof: pd.Timestamp | None = None,
+        *,
+        freq: RefFreq | None = None,
+    ) -> pd.DataFrame:
+        ref_period = self._resolve_ref_period(ref, freq=freq)
+        obs_date = ref_period.end_obs_date()
+
+        filters = ["series_key = ?", "obs_date = ?"]
+        params: list[object] = [series_key, to_utc_naive(obs_date)]
+        if asof is not None:
+            filters.append("asof_utc <= ?")
+            params.append(to_utc_naive(asof))
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT series_key, obs_date, asof_utc, value, revision_id
+            FROM {_PIT_TABLE}
+            WHERE {where_clause}
+            ORDER BY asof_utc ASC
+        """
+        out = self.conn.execute(query, params).fetchdf()
+        if out.empty:
+            return pd.DataFrame(
+                columns=[
+                    "series_key",
+                    "ref_key",
+                    "obs_date",
+                    "asof_utc",
+                    "release_rank",
+                    "value",
+                    "revision_id",
+                    "is_first",
+                    "is_latest",
+                ]
+            )
+
+        out["obs_date"] = to_utc_aware(out["obs_date"])
+        out["asof_utc"] = to_utc_aware(out["asof_utc"])
+        out["release_rank"] = range(1, len(out) + 1)
+        out["ref_key"] = ref_period.to_key()
+        out["is_first"] = out["release_rank"] == 1
+        out["is_latest"] = out["release_rank"] == int(out["release_rank"].max())
+
+        cols = [
+            "series_key",
+            "ref_key",
+            "obs_date",
+            "asof_utc",
+            "release_rank",
+            "value",
+            "revision_id",
+            "is_first",
+            "is_latest",
+        ]
+        return out[cols].reset_index(drop=True)
+
+    def resolve_release(
+        self,
+        series_key: str,
+        ref: str | RefPeriod,
+        *,
+        policy: ReleaseSelectionPolicy | Mapping[str, Any] | str = "latest",
+        asof: pd.Timestamp | None = None,
+        freq: RefFreq | None = None,
+    ) -> ReleaseRecord | None:
+        stream = self.list_release_stream(series_key, ref, asof=asof, freq=freq)
+        if stream.empty:
+            return None
+
+        mode, value = normalize_release_selection_policy(policy)
+        selected = stream
+
+        if mode == "first":
+            row = selected.iloc[0]
+        elif mode == "latest":
+            row = selected.iloc[-1]
+        elif mode == "rank":
+            rank = int(value)  # type: ignore[arg-type]
+            subset = selected[selected["release_rank"] == rank]
+            if subset.empty:
+                return None
+            row = subset.iloc[0]
+        elif mode == "horizon":
+            horizon = pd.Timedelta(value)  # type: ignore[arg-type]
+            cutoff = pd.Timestamp(selected.iloc[0]["obs_date"]) + horizon
+            if asof is not None:
+                asof_ts = to_utc_aware(asof)
+                if asof_ts < cutoff:
+                    cutoff = asof_ts
+            subset = selected[pd.to_datetime(selected["asof_utc"], utc=True) <= cutoff]
+            if subset.empty:
+                return None
+            row = subset.iloc[-1]
+        else:
+            raise PITContractError(f"Unsupported release policy mode: {mode}")
+
+        return ReleaseRecord(
+            series_key=str(row["series_key"]),
+            ref_key=str(row["ref_key"]),
+            obs_date=pd.Timestamp(row["obs_date"]),
+            asof_utc=pd.Timestamp(row["asof_utc"]),
+            release_rank=int(row["release_rank"]),
+            value=(
+                float(row["value"])
+                if ("value" in row and pd.notna(row["value"]))
+                else None
+            ),
+            revision_id=(
+                str(row["revision_id"])
+                if ("revision_id" in row and pd.notna(row["revision_id"]))
+                else None
+            ),
+        )
+
+    def _snapshot_with_release_policy(
+        self,
+        series_key: str,
+        asof: pd.Timestamp,
+        *,
+        policy: ReleaseSelectionPolicy | Mapping[str, Any] | str = "latest",
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+    ) -> pd.Series:
+        mode, value = normalize_release_selection_policy(policy)
+        if mode == "latest":
+            return self.get_snapshot(series_key, asof, start=start, end=end)
+
+        filters = ["series_key = ?", "asof_utc <= ?"]
+        params: list[object] = [series_key, to_utc_naive(asof)]
+        if start is not None:
+            filters.append("obs_date >= ?")
+            params.append(to_utc_naive(start))
+        if end is not None:
+            filters.append("obs_date <= ?")
+            params.append(to_utc_naive(end))
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT obs_date, asof_utc, value
+            FROM {_PIT_TABLE}
+            WHERE {where_clause}
+            ORDER BY obs_date ASC, asof_utc ASC
+        """
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return pd.Series(dtype="float64", name=series_key)
+
+        df["obs_date"] = to_utc_aware(df["obs_date"])
+        df["asof_utc"] = to_utc_aware(df["asof_utc"])
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+        selected_chunks: list[pd.DataFrame] = []
+        for obs_date, group in df.groupby("obs_date", sort=True):
+            group = group.sort_values("asof_utc")
+            if mode == "first":
+                selected = group.iloc[[0]]
+            elif mode == "rank":
+                rank = int(value)  # type: ignore[arg-type]
+                if rank > len(group):
+                    continue
+                selected = group.iloc[[rank - 1]]
+            elif mode == "horizon":
+                horizon = pd.Timedelta(value)  # type: ignore[arg-type]
+                cutoff = pd.Timestamp(obs_date) + horizon
+                cutoff = min(cutoff, to_utc_aware(asof))
+                window = group[group["asof_utc"] <= cutoff]
+                if window.empty:
+                    continue
+                selected = window.iloc[[-1]]
+            else:
+                raise PITContractError(f"Unsupported release policy mode: {mode}")
+            selected_chunks.append(selected)
+
+        if not selected_chunks:
+            return pd.Series(dtype="float64", name=series_key)
+
+        selected_df = pd.concat(selected_chunks, ignore_index=True)
+        out = pd.Series(
+            selected_df["value"].to_numpy(),
+            index=pd.DatetimeIndex(selected_df["obs_date"]),
+            name=series_key,
+        ).sort_index()
+        out.index.name = "obs_date"
+        return out
+
+    @staticmethod
+    def _align_snapshot_index(
+        index: pd.DatetimeIndex,
+        align: Literal["month_end", "quarter_end"],
+    ) -> pd.DatetimeIndex:
+        idx = pd.DatetimeIndex(index)
+        idx = idx.tz_convert("UTC") if idx.tz is not None else idx.tz_localize("UTC")
+        naive = idx.tz_localize(None)
+        if align == "month_end":
+            aligned = naive + MonthEnd(0)
+        elif align == "quarter_end":
+            aligned = naive.to_period("Q").to_timestamp(how="end").normalize()
+        else:
+            raise PITContractError("align must be one of {'month_end', 'quarter_end'}.")
+        return pd.DatetimeIndex(aligned).tz_localize("UTC")
+
+    def build_snapshot_panel(
+        self,
+        series_specs: Sequence[SnapshotSeriesSpec | Mapping[str, Any]],
+        asof: pd.Timestamp,
+        *,
+        align: Literal["month_end", "quarter_end"] = "month_end",
+        join: Literal["inner", "left", "right", "outer"] = "outer",
+    ) -> pd.DataFrame:
+        if join not in {"inner", "left", "right", "outer"}:
+            raise PITContractError("join must be one of {'inner', 'left', 'right', 'outer'}.")
+
+        panel: pd.DataFrame | None = None
+        for raw_spec in series_specs:
+            spec = coerce_snapshot_series_spec(raw_spec)
+            start_obs = (
+                RefPeriod.parse(spec.start_ref).end_obs_date()
+                if spec.start_ref is not None
+                else None
+            )
+            end_obs = (
+                RefPeriod.parse(spec.end_ref).end_obs_date() if spec.end_ref is not None else None
+            )
+
+            snapshot = self._snapshot_with_release_policy(
+                spec.series_key,
+                asof=asof,
+                policy=spec.release_policy,
+                start=start_obs,
+                end=end_obs,
+            )
+            if snapshot.empty:
+                s = pd.Series(dtype="float64", name=spec.alias or spec.series_key)
+            else:
+                aligned_index = self._align_snapshot_index(
+                    pd.DatetimeIndex(snapshot.index),
+                    align=align,
+                )
+                tmp = pd.DataFrame(
+                    {
+                        "source_obs_date": pd.DatetimeIndex(snapshot.index),
+                        "obs_date": aligned_index,
+                        "value": snapshot.to_numpy(),
+                    }
+                )
+                tmp = tmp.sort_values(["obs_date", "source_obs_date"])
+                tmp = tmp.drop_duplicates(subset=["obs_date"], keep="last")
+                s = pd.Series(
+                    tmp["value"].to_numpy(),
+                    index=pd.DatetimeIndex(tmp["obs_date"]),
+                    name=spec.alias or spec.series_key,
+                ).sort_index()
+
+            frame = s.to_frame()
+            panel = frame if panel is None else panel.join(frame, how=join)
+
+        if panel is None:
+            return pd.DataFrame()
+
+        panel.index = (
+            panel.index.tz_convert("UTC")
+            if panel.index.tz is not None
+            else panel.index.tz_localize("UTC")
+        )
+        panel.index.name = "obs_date"
+        return panel.sort_index()
 
     def _list_candidate_asofs(
         self,
@@ -836,6 +1453,54 @@ class PITAccessor:
         if df.empty:
             return pd.DatetimeIndex([], tz="UTC")
         return pd.DatetimeIndex(to_utc_aware(df["asof_utc"]))
+
+    def list_union_vintages(
+        self,
+        series_keys: Sequence[str],
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+        *,
+        mode: Literal["event", "calendar"] = "event",
+        calendar_freq: str = "D",
+    ) -> pd.DatetimeIndex:
+        unique_keys = sorted({str(k) for k in series_keys if str(k).strip()})
+
+        if mode == "event":
+            if not unique_keys:
+                return pd.DatetimeIndex([], tz="UTC")
+
+            placeholders = ", ".join(["?"] * len(unique_keys))
+            filters = [f"series_key IN ({placeholders})"]
+            params: list[object] = [*unique_keys]
+            if start is not None:
+                filters.append("asof_utc >= ?")
+                params.append(to_utc_naive(start))
+            if end is not None:
+                filters.append("asof_utc <= ?")
+                params.append(to_utc_naive(end))
+
+            where_clause = " AND ".join(filters)
+            query = f"""
+                SELECT DISTINCT asof_utc
+                FROM {_PIT_TABLE}
+                WHERE {where_clause}
+                ORDER BY asof_utc ASC
+            """
+            df = self.conn.execute(query, params).fetchdf()
+            if df.empty:
+                return pd.DatetimeIndex([], tz="UTC")
+            return pd.DatetimeIndex(to_utc_aware(df["asof_utc"])).sort_values().unique()
+
+        if mode == "calendar":
+            if start is None or end is None:
+                raise PITContractError("mode='calendar' requires both start and end.")
+            start_ts = to_utc_aware(start)
+            end_ts = to_utc_aware(end)
+            if start_ts > end_ts:
+                return pd.DatetimeIndex([], tz="UTC")
+            return pd.date_range(start=start_ts, end=end_ts, freq=calendar_freq, tz="UTC")
+
+        raise PITContractError("mode must be one of {'event', 'calendar'}.")
 
     def _build_obs_path_rows(
         self,
@@ -1531,6 +2196,581 @@ class PITAccessor:
             effective_start_asof=effective_start_asof,
         )
 
+    def _upsert_expression_graph_metadata(self, spec: PITExpressionGraphSpec) -> str:
+        graph_id = spec.resolved_graph_id()
+        self.conn.execute(
+            f"""
+            INSERT INTO {_PIT_EXPR_GRAPHS_TABLE} (
+                graph_id,
+                spec_hash,
+                spec_json,
+                description,
+                created_utc
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(graph_id) DO UPDATE SET
+                spec_hash=excluded.spec_hash,
+                spec_json=excluded.spec_json,
+                description=excluded.description,
+                created_utc=excluded.created_utc
+            """,
+            [
+                graph_id,
+                spec.spec_hash(),
+                json.dumps(spec.spec_payload(), sort_keys=True, separators=(",", ":")),
+                spec.description,
+                to_utc_naive(pd.Timestamp.now("UTC")),
+            ],
+        )
+        return graph_id
+
+    def _insert_expression_graph_run(
+        self,
+        *,
+        run_id: str,
+        graph_id: str,
+        start_obs: pd.Timestamp | None,
+        end_obs: pd.Timestamp | None,
+        start_asof: pd.Timestamp | None,
+        end_asof: pd.Timestamp | None,
+        incremental: bool,
+        requested_since_asof: pd.Timestamp | None,
+        effective_start_asof: pd.Timestamp | None,
+        requested_since_run_id: str | None,
+        max_output_asof: pd.Timestamp | None,
+        rows_written: int,
+        node_count: int,
+        status: str,
+        started_utc: pd.Timestamp,
+        finished_utc: pd.Timestamp,
+    ) -> None:
+        self.conn.execute(
+            f"""
+            INSERT INTO {_PIT_EXPR_GRAPH_RUNS_TABLE} (
+                run_id,
+                graph_id,
+                start_obs,
+                end_obs,
+                start_asof,
+                end_asof,
+                incremental,
+                requested_since_asof,
+                effective_start_asof,
+                requested_since_run_id,
+                max_output_asof,
+                rows_written,
+                node_count,
+                status,
+                started_utc,
+                finished_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                run_id,
+                graph_id,
+                to_utc_naive(start_obs),
+                to_utc_naive(end_obs),
+                to_utc_naive(start_asof),
+                to_utc_naive(end_asof),
+                bool(incremental),
+                to_utc_naive(requested_since_asof),
+                to_utc_naive(effective_start_asof),
+                requested_since_run_id,
+                to_utc_naive(max_output_asof),
+                int(rows_written),
+                int(node_count),
+                status,
+                to_utc_naive(started_utc),
+                to_utc_naive(finished_utc),
+            ],
+        )
+
+    def _expression_graph_max_output_asof(self, graph_id: str) -> pd.Timestamp | None:
+        row = self.conn.execute(
+            f"SELECT spec_json FROM {_PIT_EXPR_GRAPHS_TABLE} WHERE graph_id = ?",
+            [graph_id],
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+
+        try:
+            payload = json.loads(str(row[0]))
+        except json.JSONDecodeError:
+            return None
+
+        raw_nodes = payload.get("nodes")
+        if not isinstance(raw_nodes, list):
+            return None
+
+        keys: list[str] = []
+        for raw in raw_nodes:
+            if not isinstance(raw, Mapping):
+                continue
+            key = str(raw.get("output_series_key", "")).strip()
+            if key:
+                keys.append(key)
+        keys = sorted(set(keys))
+        if not keys:
+            return None
+
+        placeholders = ", ".join(["?"] * len(keys))
+        max_row = self.conn.execute(
+            f"""
+            SELECT MAX(asof_utc)
+            FROM {_PIT_TABLE}
+            WHERE series_key IN ({placeholders})
+            """,
+            keys,
+        ).fetchone()
+        if max_row is None or max_row[0] is None:
+            return None
+        return to_utc_aware(max_row[0])
+
+    def _resolve_expression_graph_effective_start_asof(
+        self,
+        *,
+        graph_id: str,
+        incremental: bool,
+        start_asof: pd.Timestamp | None,
+        since_asof: pd.Timestamp | None,
+        since_run_id: str | None,
+    ) -> pd.Timestamp | None:
+        if not incremental and (since_asof is not None or since_run_id is not None):
+            raise PITContractError(
+                "since_asof/since_run_id require incremental=True for expression graph execution."
+            )
+
+        anchors: list[pd.Timestamp] = []
+        if start_asof is not None:
+            anchors.append(to_utc_aware(start_asof))
+        if since_asof is not None:
+            anchors.append(to_utc_aware(since_asof))
+
+        if since_run_id is not None:
+            row = self.conn.execute(
+                f"""
+                SELECT graph_id, max_output_asof, finished_utc
+                FROM {_PIT_EXPR_GRAPH_RUNS_TABLE}
+                WHERE run_id = ?
+                """,
+                [since_run_id],
+            ).fetchone()
+            if row is None:
+                raise PITContractError(f"Unknown PIT expression graph run_id: {since_run_id}")
+            run_graph_id = str(row[0])
+            if run_graph_id != graph_id:
+                raise PITContractError(
+                    "since_run_id belongs to a different expression graph. "
+                    f"Expected graph_id='{graph_id}', got '{run_graph_id}'."
+                )
+            explicit_max_asof = row[1]
+            if explicit_max_asof is not None:
+                anchors.append(to_utc_aware(explicit_max_asof))
+            else:
+                inferred = self._expression_graph_max_output_asof(graph_id)
+                if inferred is not None:
+                    anchors.append(inferred)
+                else:
+                    anchors.append(to_utc_aware(row[2]))
+        elif incremental and since_asof is None:
+            latest = self.conn.execute(
+                f"""
+                SELECT max_output_asof, finished_utc
+                FROM {_PIT_EXPR_GRAPH_RUNS_TABLE}
+                WHERE graph_id = ? AND status = 'success'
+                ORDER BY started_utc DESC
+                LIMIT 1
+                """,
+                [graph_id],
+            ).fetchone()
+            if latest is not None:
+                explicit_max_asof = latest[0]
+                if explicit_max_asof is not None:
+                    anchors.append(to_utc_aware(explicit_max_asof))
+                else:
+                    inferred = self._expression_graph_max_output_asof(graph_id)
+                    if inferred is not None:
+                        anchors.append(inferred)
+                    else:
+                        anchors.append(to_utc_aware(latest[1]))
+
+        if not anchors:
+            return None
+        return max(anchors)
+
+    @staticmethod
+    def _expression_lineage_meta(
+        *,
+        graph_id: str,
+        node: PITExpressionNode,
+        source_asof_by_series: Mapping[str, pd.Timestamp],
+    ) -> str:
+        payload: dict[str, object] = {
+            "graph_id": graph_id,
+            "node_name": node.name,
+            "output_series_key": node.output_series_key,
+            "expression": node.expression,
+            "expression_hash": _expression_hash(node.expression),
+            "inputs": dict(node.inputs),
+            "depends_on": list(node.depends_on),
+            "join": node.join,
+            "fill_value": node.fill_value,
+            "source_asof_by_series_utc": {
+                k: to_utc_aware(v).isoformat() for k, v in source_asof_by_series.items()
+            },
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    def _materialize_expression_node_rows(
+        self,
+        *,
+        graph_id: str,
+        node: PITExpressionNode,
+        start_obs: pd.Timestamp | None,
+        end_obs: pd.Timestamp | None,
+        start_asof: pd.Timestamp | None,
+        end_asof: pd.Timestamp | None,
+        lag_policy: ReleaseLagPolicy | None,
+    ) -> pd.DataFrame:
+        input_series_keys = sorted({str(v) for v in node.inputs.values() if str(v).strip()})
+        asof_values = self.list_union_vintages(
+            input_series_keys,
+            start=start_asof,
+            end=end_asof,
+            mode="event",
+        )
+        if len(asof_values) == 0:
+            return pd.DataFrame(
+                columns=["series_key", "obs_date", "asof_utc", "value", "source", "meta_json"]
+            )
+
+        start_obs_utc = to_utc_aware(start_obs) if start_obs is not None else None
+        end_obs_utc = to_utc_aware(end_obs) if end_obs is not None else None
+        chunks: list[pd.DataFrame] = []
+
+        for asof in asof_values:
+            source_asof_by_series: dict[str, pd.Timestamp] = {}
+            env: dict[str, pd.Series] = {}
+            for alias, series_key in node.inputs.items():
+                effective = asof
+                if lag_policy is not None:
+                    effective = effective_asof(effective, series_key, lag_policy)
+                if effective > asof:
+                    raise PITCausalityError(
+                        "Causality violation: effective source_asof is later than output asof. "
+                        f"series_key={series_key}, source_asof={effective}, output_asof={asof}"
+                    )
+                source_asof_by_series[series_key] = effective
+                env[alias] = self.get_snapshot(
+                    series_key,
+                    effective,
+                    start=start_obs,
+                    end=end_obs,
+                )
+
+            transformed = _evaluate_expression_series(
+                node.expression,
+                env,
+                join=node.join,
+                fill_value=node.fill_value,
+            ).dropna()
+            if transformed.empty:
+                continue
+
+            if start_obs_utc is not None:
+                transformed = transformed[transformed.index >= start_obs_utc]
+            if end_obs_utc is not None:
+                transformed = transformed[transformed.index <= end_obs_utc]
+            if transformed.empty:
+                continue
+
+            lineage = self._expression_lineage_meta(
+                graph_id=graph_id,
+                node=node,
+                source_asof_by_series=source_asof_by_series,
+            )
+            chunks.append(
+                pd.DataFrame(
+                    {
+                        "series_key": node.output_series_key,
+                        "obs_date": transformed.index,
+                        "asof_utc": [asof] * len(transformed),
+                        "value": transformed.to_numpy(),
+                        "source": [f"pit_expr_graph:{graph_id}:{node.name}"] * len(transformed),
+                        "meta_json": [lineage] * len(transformed),
+                    }
+                )
+            )
+
+        if not chunks:
+            return pd.DataFrame(
+                columns=["series_key", "obs_date", "asof_utc", "value", "source", "meta_json"]
+            )
+        return pd.concat(chunks, ignore_index=True)
+
+    def explain_expression_graph(
+        self,
+        spec: PITExpressionGraphSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        graph_spec = coerce_expression_graph_spec(spec)
+        graph_id = graph_spec.resolved_graph_id()
+        ordered_nodes = graph_spec.ordered_nodes()
+        effective_start_asof = self._resolve_expression_graph_effective_start_asof(
+            graph_id=graph_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+
+        node_items: list[dict[str, object]] = []
+        for node in ordered_nodes:
+            input_series_keys = sorted({str(v) for v in node.inputs.values() if str(v).strip()})
+            asof_values = self.list_union_vintages(
+                input_series_keys,
+                start=effective_start_asof,
+                end=end_asof,
+                mode="event",
+            )
+            node_items.append(
+                {
+                    "node_name": node.name,
+                    "depends_on": list(node.depends_on),
+                    "output_series_key": node.output_series_key,
+                    "expression": node.expression,
+                    "expression_hash": _expression_hash(node.expression),
+                    "inputs": dict(node.inputs),
+                    "join": node.join,
+                    "fill_value": node.fill_value,
+                    "candidate_asof_count": int(len(asof_values)),
+                    "candidate_asof_start_utc": asof_values.min() if len(asof_values) else None,
+                    "candidate_asof_end_utc": asof_values.max() if len(asof_values) else None,
+                    "engine_requested": "python",
+                    "engine_used": "python",
+                }
+            )
+
+        return {
+            "graph_id": graph_id,
+            "spec_hash": graph_spec.spec_hash(),
+            "description": graph_spec.description,
+            "incremental": incremental,
+            "requested_since_asof": to_utc_aware(since_asof) if since_asof is not None else None,
+            "requested_since_run_id": since_run_id,
+            "effective_start_asof": effective_start_asof,
+            "end_asof": to_utc_aware(end_asof) if end_asof is not None else None,
+            "start_obs": to_utc_aware(start_obs) if start_obs is not None else None,
+            "end_obs": to_utc_aware(end_obs) if end_obs is not None else None,
+            "node_count": len(node_items),
+            "nodes": node_items,
+        }
+
+    def preview_expression_graph(
+        self,
+        spec: PITExpressionGraphSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        overwrite: bool = False,
+        lag_policy: ReleaseLagPolicy | None = None,
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+        include_intermediate: bool = False,
+    ) -> pd.DataFrame:
+        graph_spec = coerce_expression_graph_spec(spec)
+        graph_id = graph_spec.resolved_graph_id()
+        ordered_nodes = graph_spec.ordered_nodes()
+        effective_start_asof = self._resolve_expression_graph_effective_start_asof(
+            graph_id=graph_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+
+        node_frames: list[pd.DataFrame] = []
+        self.conn.execute("BEGIN TRANSACTION")
+        try:
+            for node in ordered_nodes:
+                result_df = self._materialize_expression_node_rows(
+                    graph_id=graph_id,
+                    node=node,
+                    start_obs=start_obs,
+                    end_obs=end_obs,
+                    start_asof=effective_start_asof,
+                    end_asof=end_asof,
+                    lag_policy=lag_policy,
+                )
+                if overwrite:
+                    self._delete_transformed_rows(
+                        output_series_key=node.output_series_key,
+                        start_obs=start_obs,
+                        end_obs=end_obs,
+                        start_asof=effective_start_asof,
+                        end_asof=end_asof,
+                    )
+                if not result_df.empty:
+                    self.upsert_pit_observations(result_df, strict=False)
+                    tagged = result_df.copy()
+                    tagged["node_name"] = node.name
+                    node_frames.append(tagged)
+            self.conn.execute("ROLLBACK")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+        if not node_frames:
+            base_columns = [
+                "series_key",
+                "obs_date",
+                "asof_utc",
+                "value",
+                "source",
+                "meta_json",
+                "node_name",
+            ]
+            return pd.DataFrame(columns=base_columns)
+
+        if include_intermediate:
+            return pd.concat(node_frames, ignore_index=True)
+        return node_frames[-1].reset_index(drop=True)
+
+    def apply_expression_graph(
+        self,
+        spec: PITExpressionGraphSpec | Mapping[str, Any],
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        overwrite: bool = False,
+        lag_policy: ReleaseLagPolicy | None = None,
+        incremental: bool = False,
+        since_asof: pd.Timestamp | None = None,
+        since_run_id: str | None = None,
+    ) -> PITExpressionGraphResult:
+        started_utc = pd.Timestamp.now(tz="UTC")
+        run_id = str(uuid.uuid4())
+        graph_spec = coerce_expression_graph_spec(spec)
+        graph_id = self._upsert_expression_graph_metadata(graph_spec)
+        ordered_nodes = graph_spec.ordered_nodes()
+        effective_start_asof = self._resolve_expression_graph_effective_start_asof(
+            graph_id=graph_id,
+            incremental=incremental,
+            start_asof=start_asof,
+            since_asof=since_asof,
+            since_run_id=since_run_id,
+        )
+
+        total_rows = 0
+        node_rows_written: dict[str, int] = {}
+        max_output_asof: pd.Timestamp | None = None
+
+        try:
+            for node in ordered_nodes:
+                result_df = self._materialize_expression_node_rows(
+                    graph_id=graph_id,
+                    node=node,
+                    start_obs=start_obs,
+                    end_obs=end_obs,
+                    start_asof=effective_start_asof,
+                    end_asof=end_asof,
+                    lag_policy=lag_policy,
+                )
+                if overwrite:
+                    self._delete_transformed_rows(
+                        output_series_key=node.output_series_key,
+                        start_obs=start_obs,
+                        end_obs=end_obs,
+                        start_asof=effective_start_asof,
+                        end_asof=end_asof,
+                    )
+                rows = int(len(result_df))
+                node_rows_written[node.name] = rows
+                if rows > 0:
+                    self.upsert_pit_observations(result_df, strict=False)
+                    row = self.conn.execute(
+                        f"""
+                        SELECT MAX(asof_utc)
+                        FROM {_PIT_TABLE}
+                        WHERE series_key = ? AND source = ?
+                        """,
+                        [
+                            node.output_series_key,
+                            f"pit_expr_graph:{graph_id}:{node.name}",
+                        ],
+                    ).fetchone()
+                    if row is not None and row[0] is not None:
+                        candidate = to_utc_aware(row[0])
+                        if max_output_asof is None or candidate > max_output_asof:
+                            max_output_asof = candidate
+                total_rows += rows
+
+            status = "success"
+        except Exception:
+            finished_utc = pd.Timestamp.now(tz="UTC")
+            self._insert_expression_graph_run(
+                run_id=run_id,
+                graph_id=graph_id,
+                start_obs=start_obs,
+                end_obs=end_obs,
+                start_asof=start_asof,
+                end_asof=end_asof,
+                incremental=incremental,
+                requested_since_asof=since_asof,
+                effective_start_asof=effective_start_asof,
+                requested_since_run_id=since_run_id,
+                max_output_asof=max_output_asof,
+                rows_written=total_rows,
+                node_count=len(node_rows_written),
+                status="failed",
+                started_utc=started_utc,
+                finished_utc=finished_utc,
+            )
+            raise
+
+        finished_utc = pd.Timestamp.now(tz="UTC")
+        self._insert_expression_graph_run(
+            run_id=run_id,
+            graph_id=graph_id,
+            start_obs=start_obs,
+            end_obs=end_obs,
+            start_asof=start_asof,
+            end_asof=end_asof,
+            incremental=incremental,
+            requested_since_asof=since_asof,
+            effective_start_asof=effective_start_asof,
+            requested_since_run_id=since_run_id,
+            max_output_asof=max_output_asof,
+            rows_written=total_rows,
+            node_count=len(node_rows_written),
+            status=status,
+            started_utc=started_utc,
+            finished_utc=finished_utc,
+        )
+
+        return PITExpressionGraphResult(
+            graph_id=graph_id,
+            run_id=run_id,
+            status=status,
+            rows_written=total_rows,
+            node_rows_written=node_rows_written,
+            run_started_utc=started_utc,
+            run_finished_utc=finished_utc,
+            incremental=incremental,
+            effective_start_asof=effective_start_asof,
+        )
+
     def list_transforms(self, output_series_key: str | None = None) -> pd.DataFrame:
         query = f"""
             SELECT
@@ -1616,6 +2856,89 @@ class PITAccessor:
         if limit is not None:
             if limit <= 0:
                 raise PITContractError("list_pipeline_runs limit must be > 0 when provided.")
+            query += " LIMIT ?"
+            params.append(int(limit))
+
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return df
+        dt_cols = [
+            "start_obs",
+            "end_obs",
+            "start_asof",
+            "end_asof",
+            "requested_since_asof",
+            "effective_start_asof",
+            "max_output_asof",
+            "started_utc",
+            "finished_utc",
+        ]
+        for col in dt_cols:
+            if col in df.columns:
+                df[col] = to_utc_aware(df[col])
+        return df
+
+    def list_expression_graphs(self, graph_id: str | None = None) -> pd.DataFrame:
+        query = f"""
+            SELECT
+                graph_id,
+                spec_hash,
+                spec_json,
+                description,
+                created_utc
+            FROM {_PIT_EXPR_GRAPHS_TABLE}
+        """
+        params: list[object] = []
+        if graph_id is not None:
+            query += " WHERE graph_id = ?"
+            params.append(graph_id)
+        query += " ORDER BY created_utc DESC, graph_id"
+
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return df
+        df["created_utc"] = to_utc_aware(df["created_utc"])
+        return df
+
+    def list_expression_graph_runs(
+        self,
+        graph_id: str | None = None,
+        *,
+        limit: int | None = 100,
+    ) -> pd.DataFrame:
+        query = f"""
+            SELECT
+                run_id,
+                graph_id,
+                start_obs,
+                end_obs,
+                start_asof,
+                end_asof,
+                incremental,
+                requested_since_asof,
+                effective_start_asof,
+                requested_since_run_id,
+                max_output_asof,
+                rows_written,
+                node_count,
+                status,
+                started_utc,
+                finished_utc
+            FROM {_PIT_EXPR_GRAPH_RUNS_TABLE}
+        """
+        params: list[object] = []
+        clauses: list[str] = []
+        if graph_id is not None:
+            clauses.append("graph_id = ?")
+            params.append(graph_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY started_utc DESC, run_id"
+        if limit is not None:
+            if limit <= 0:
+                raise PITContractError(
+                    "list_expression_graph_runs limit must be > 0 when provided."
+                )
             query += " LIMIT ?"
             params.append(int(limit))
 

@@ -4,6 +4,12 @@ This page mirrors release notes from [`CHANGELOG.md`](https://github.com/steveya
 
 ## Unreleased
 
+- Added PIT contract version API (`PIT_CONTRACT_VERSION`, `get_pit_contract_version`) and migration guide support.
+- Added ingestion policy modes for PIT upserts: `strict=\"error|warn|coerce\"` (`bool` remains backward compatible).
+- Added release selection helpers: `list_release_stream(...)` and `resolve_release(...)`.
+- Added union-vintage utility: `list_union_vintages(..., mode=\"event|calendar\")`.
+- Added expression graph APIs: `explain_expression_graph(...)`, `preview_expression_graph(...)`, `apply_expression_graph(...)`.
+- Added snapshot panel builder: `build_snapshot_panel(series_specs, asof, align=..., join=...)`.
 - Added PIT transform pipeline orchestration (`PITPipelineSpec`, `PITPipelineStep`, `preview_pipeline`, `apply_pipeline`, `explain_pipeline`) with dependency-safe execution.
 - Added PIT pipeline metadata/run tracking tables and accessors (`list_pipelines`, `list_pipeline_runs`) for reproducible run history.
 - Added incremental pipeline controls (`incremental`, `since_asof`, `since_run_id`) and deterministic effective as-of anchor resolution.

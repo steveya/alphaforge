@@ -43,6 +43,7 @@ nav:
       - Data Sources: guides/data-sources.md
       - PIT Data: guides/pit.md
       - PIT API Contract: guides/pit-api-contract.md
+      - PIT Migrations: guides/pit-migrations.md
       - Development: guides/development.md
   - API:
       - Package: api/package.md
@@ -52,6 +53,8 @@ nav:
       - PIT Accessor: api/pit-accessor.md
       - PIT Transforms: api/pit-transforms.md
       - PIT Pipelines: api/pit-pipelines.md
+      - PIT Models: api/pit-models.md
+      - PIT Contract Version: api/pit-contract.md
       - PIT Exceptions: api/pit-exceptions.md
       - PIT Validation: api/pit-validation.md
       - PIT Guards: api/pit-guards.md

@@ -13,6 +13,10 @@ class PITValidationError(PITError):
     """Raised when PIT data fails validation."""
 
 
+class PITValidationWarning(UserWarning):
+    """Warning emitted for non-blocking PIT validation outcomes."""
+
+
 class PITUnsupportedOperationError(PITContractError):
     """Raised when an unsupported PIT operation is requested."""
 
@@ -27,4 +31,3 @@ class PITCausalityError(PITValidationError):
 
 class PITEngineError(PITError):
     """Raised when requested transform engine cannot be satisfied."""
-

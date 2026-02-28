@@ -25,7 +25,11 @@ Uniqueness is enforced on `(series_key, obs_date, asof_utc)`.
 
 ## Ingestion contract
 
-`PITAccessor.upsert_pit_observations(df, strict=True)` validates PIT rows before write.
+`PITAccessor.upsert_pit_observations(df, strict=...)` supports three policy modes:
+
+- `strict=\"error\"` (or `True`): block writes on validation errors.
+- `strict=\"warn\"` (or `False`): continue writes and emit `PITValidationWarning`.
+- `strict=\"coerce\"`: normalize and repair rows (drop irrecoverable rows deterministically).
 
 Strict mode rejects:
 
@@ -34,6 +38,18 @@ Strict mode rejects:
 - duplicate PIT keys in the input frame
 - timezone issues in `asof_utc` / `release_time_utc`
 - future rows where `obs_date > asof_utc`
+
+## Release/ref helpers
+
+```python
+stream = pit.list_release_stream(\"GDP\", \"2024Q4\", asof=pd.Timestamp(\"2025-03-31\", tz=\"UTC\"))
+record = pit.resolve_release(
+    \"GDP\",
+    \"2024Q4\",
+    policy={\"mode\": \"rank\", \"rank\": 2},
+    asof=pd.Timestamp(\"2025-03-31\", tz=\"UTC\"),
+)
+```
 
 ## Transform API
 
@@ -128,6 +144,44 @@ plan = pit.explain_pipeline(pipeline, incremental=True)
 preview = pit.preview_pipeline(pipeline, overwrite=True)
 result = pit.apply_pipeline(pipeline, overwrite=True, incremental=True)
 runs = pit.list_pipeline_runs(result.pipeline_id, limit=5)
+```
+
+## Expression graph API
+
+```python
+from alphaforge.pit.models import PITExpressionGraphSpec, PITExpressionNode
+
+graph = PITExpressionGraphSpec(
+    graph_id=\"macro/bridge_demo\",
+    nodes=(
+        PITExpressionNode(
+            name=\"spread\",
+            output_series_key=\"GDP_minus_CPI_expr\",
+            expression=\"gdp - lag(cpi, 1)\",
+            inputs={\"gdp\": \"GDP\", \"cpi\": \"CPI\"},
+            join=\"inner\",
+        ),
+    ),
+)
+
+plan = pit.explain_expression_graph(graph)
+preview = pit.preview_expression_graph(graph, overwrite=True)
+result = pit.apply_expression_graph(graph, overwrite=True)
+```
+
+## Union vintages and snapshot panels
+
+```python
+vintages = pit.list_union_vintages([\"GDP\", \"CPI\"], mode=\"event\")
+panel = pit.build_snapshot_panel(
+    [
+        {\"series_key\": \"GDP\", \"alias\": \"gdp\"},
+        {\"series_key\": \"CPI\", \"alias\": \"cpi\", \"release_policy\": \"latest\"},
+    ],
+    asof=pd.Timestamp(\"2025-06-30\", tz=\"UTC\"),
+    align=\"month_end\",
+    join=\"outer\",
+)
 ```
 
 ## Engine contract

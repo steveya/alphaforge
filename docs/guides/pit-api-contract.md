@@ -82,9 +82,13 @@ PIT transforms support two execution backends:
 
 ## Ingestion validation contract
 
-`upsert_pit_observations(..., strict=True)` enforces PIT validation before writes.
+`upsert_pit_observations(..., strict=...)` supports ingestion policy modes:
 
-Strict mode rejects:
+- `strict="error"` (or `True`): enforce PIT validation before writes.
+- `strict="warn"` (or `False`): continue write and emit `PITValidationWarning`.
+- `strict="coerce"`: repair/drop irrecoverable rows deterministically before write.
+
+Error mode rejects:
 
 - missing required columns
 - nulls in required fields
@@ -93,6 +97,47 @@ Strict mode rejects:
 - future rows (`obs_date > asof_utc`)
 
 `validate_pit_observations(df)` returns a `PITValidationReport` for preflight checks.
+
+## Release helper contract
+
+Release stream helpers for reference periods:
+
+- `list_release_stream(series_key, ref, asof=None, freq=None)`
+  - returns one ref-period stream ordered by `asof_utc` with `release_rank`, `is_first`, and `is_latest`.
+- `resolve_release(series_key, ref, policy=..., asof=None, freq=None)`
+  - supports policies: `"first"`, `"latest"`, `{"mode":"rank","rank":n}`, `{"mode":"horizon","horizon":...}`.
+
+## Expression graph contract
+
+Expression graphs define deterministic, dependency-ordered multi-series PIT transforms.
+
+- `explain_expression_graph(...)`
+- `preview_expression_graph(...)`
+- `apply_expression_graph(...)`
+
+Expression grammar v1:
+
+- operators: `+`, `-`, `*`, `/`, parentheses
+- function calls: `lag(alias, n)`, `diff(alias, n)`
+- no arbitrary callable execution
+
+Each node applies deterministic as-of alignment using union vintages of direct inputs.
+
+## Vintage union and snapshot panel contract
+
+- `list_union_vintages(series_keys, start, end, mode=\"event|calendar\")`
+- `build_snapshot_panel(series_specs, asof, align=\"month_end|quarter_end\", join=...)`
+
+Snapshot panels support per-series release policies and deterministic ref alignment.
+
+## PIT contract versioning
+
+Version API:
+
+- `PIT_CONTRACT_VERSION`
+- `get_pit_contract_version()`
+
+Migration entries for contract/validation changes are recorded in `docs/guides/pit-migrations.md`.
 
 ## Data-source query contract
 
