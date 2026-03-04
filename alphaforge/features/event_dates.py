@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import calendar as _cal
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -25,7 +25,6 @@ import pandas as pd
 from .frame import FeatureFrame
 from .ids import group_path, make_feature_id
 from .template import ParamSpec, SliceSpec
-
 
 # ---------------------------------------------------------------------------
 # FOMC meeting dates  (source: federalreserve.gov historical schedule)
