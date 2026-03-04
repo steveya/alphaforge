@@ -152,3 +152,8 @@ Migration entries for contract/validation changes are recorded in `docs/guides/p
   - rejects `Query.vintage_id`
 
 Use `PITDataSource.snapshot_query(...)` and `PITDataSource.observations_query(...)` helper constructors for safe defaults.
+
+
+## Type annotations
+
+All public PIT APIs carry complete type annotations. `release_policy` parameters accept `ReleaseSelectionPolicy | Mapping[str, Any] | str`; the TypedDict union is narrowed internally before key access.

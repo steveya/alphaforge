@@ -22,3 +22,10 @@ This guide tracks PIT contract versions and required migration actions for break
   2. Downstream nowcast release-rank logic can migrate to `list_release_stream(...)` and `resolve_release(...)`.
   3. Prefer expression graph APIs for multi-input PIT bridge features to standardize lineage and as-of alignment.
 
+
+### Version 2.0.1
+
+- **Date:** 2026-03-04
+- **Change Type:** non-breaking
+- **Summary:** Fixed stale `type: ignore` comments and TypedDict narrowing in `pit/models.py` and `pit/accessor.py`. No runtime behavior change.
+- **Required Actions:** None.
