@@ -19,6 +19,7 @@ class CalendarFlagsTemplate:
     Produces:
       - dow: integer 0..6 (or one-hot if one_hot=True)
       - is_month_end / is_quarter_end / is_year_end
+      - month: integer 1..12
     """
 
     name: str = "calendar_flags"
@@ -75,9 +76,10 @@ class CalendarFlagsTemplate:
         # Base time index (repeated for entities)
         dates_rep = idx.get_level_values("ts_utc")
 
-        def _add_col(col_name: str, values: pd.Series, meta: Dict[str, Any]):
+        def _add_col(col_name: str, values, meta: Dict[str, Any]):
             fid = make_feature_id(f"calendar.{cal_name}", "*", "calendar", col_name, {})
-            X_cols[fid] = pd.Series(values.values, index=idx)
+            vals = values.values if hasattr(values, "values") else values
+            X_cols[fid] = pd.Series(vals, index=idx)
             cat.append(
                 {
                     "feature_id": fid,
@@ -112,6 +114,9 @@ class CalendarFlagsTemplate:
 
         if "is_year_end" in flags:
             _add_col("is_year_end", dates_rep.is_year_end.astype(float), {})
+
+        if "month" in flags:
+            _add_col("month", dates_rep.month.astype(float), {})
 
         X = pd.DataFrame(X_cols, index=idx).sort_index()
         catalog = pd.DataFrame(cat).set_index("feature_id").sort_index()
