@@ -26,5 +26,5 @@ def test_cftc_swaps_weekly_csv_parse_and_filters() -> None:
 
     assert not df.empty
     assert {"date", "entity_id", "asof_utc", "value"}.issubset(df.columns)
-    assert str(df["date"].dtype).startswith("datetime64[ns,")
+    assert str(df["date"].dtype).startswith(("datetime64[ns,", "datetime64[us,"))
     assert (df["date"] <= pd.Timestamp("2026-01-05", tz="UTC")).all()

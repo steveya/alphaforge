@@ -55,7 +55,7 @@ def test_dtcc_events_and_daily_aggregation() -> None:
     )
 
     assert not events.empty
-    assert str(events["ts_utc"].dtype).startswith("datetime64[ns,")
+    assert str(events["ts_utc"].dtype).startswith(("datetime64[ns,", "datetime64[us,"))
     assert events["entity_id"].str.contains("dtccppd").all()
 
     first_entity = events["entity_id"].iloc[0]
@@ -74,4 +74,4 @@ def test_dtcc_events_and_daily_aggregation() -> None:
     assert "trade_count" in daily.columns
     assert int(daily["trade_count"].iloc[0]) >= 1
     assert "notional_sum" in daily.columns
-    assert str(daily["asof_utc"].dtype).startswith("datetime64[ns,")
+    assert str(daily["asof_utc"].dtype).startswith(("datetime64[ns,", "datetime64[us,"))

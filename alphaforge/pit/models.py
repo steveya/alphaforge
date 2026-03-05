@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, TypedDict
+from typing import Any, Literal, Mapping, TypedDict, cast
 
 import pandas as pd
 
@@ -298,7 +298,7 @@ def coerce_snapshot_series_spec(
         alias=alias,
         start_ref=start_ref,
         end_ref=end_ref,
-        release_policy=release_policy,  # type: ignore[arg-type]
+        release_policy=release_policy,
     )
 
 
@@ -316,19 +316,20 @@ def normalize_release_selection_policy(
     if not isinstance(policy, Mapping):
         raise PITContractError("Release policy must be a string or mapping.")
 
-    mode = str(policy.get("mode", "")).strip().lower()
+    policy_map: Mapping[str, Any] = cast(Mapping[str, Any], policy)
+    mode = str(policy_map.get("mode", "")).strip().lower()
     if mode == "rank":
-        if "rank" not in policy:
+        if "rank" not in policy_map:
             raise PITContractError("Release policy mode='rank' requires 'rank'.")
-        rank = int(policy["rank"])
+        rank = int(policy_map["rank"])
         if rank <= 0:
             raise PITContractError("Release policy rank must be > 0.")
         return mode, rank
 
     if mode == "horizon":
-        if "horizon" not in policy:
+        if "horizon" not in policy_map:
             raise PITContractError("Release policy mode='horizon' requires 'horizon'.")
-        horizon = pd.Timedelta(policy["horizon"])
+        horizon = pd.Timedelta(policy_map["horizon"])
         if horizon < pd.Timedelta(0):
             raise PITContractError("Release policy horizon must be >= 0.")
         return mode, horizon

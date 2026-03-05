@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
+
 - Added PIT contract version API (`PIT_CONTRACT_VERSION`, `get_pit_contract_version`) and migration guide support.
 - Added ingestion policy modes for PIT upserts: `strict=\"error|warn|coerce\"` (`bool` remains backward compatible).
 - Added release selection helpers: `list_release_stream(...)` and `resolve_release(...)`.

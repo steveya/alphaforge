@@ -75,7 +75,7 @@ jobs:
           python-version: "3.11"
       - name: Check PIT docs/changelog sync
         run: |
-          git fetch --no-tags --prune --depth=1 origin "${{ github.base_ref }}"
+          git fetch --no-tags --prune origin "${{ github.base_ref }}"
           CHANGED="$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)"
           python scripts/check_pit_docs_sync.py ${CHANGED}
 

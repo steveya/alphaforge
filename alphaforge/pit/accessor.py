@@ -407,7 +407,7 @@ def _eval_expression_ast(
         return _coerce_series_numeric(env[node.id])
 
     if isinstance(node, ast.Constant):
-        return float(node.value)
+        return float(node.value)  # type: ignore[arg-type]
 
     if isinstance(node, ast.UnaryOp):
         value = _eval_expression_ast(node.operand, env, join=join, fill_value=fill_value)
@@ -416,9 +416,9 @@ def _eval_expression_ast(
         return value if isinstance(node.op, ast.UAdd) else -float(value)
 
     if isinstance(node, ast.Call):
-        func_name = str(node.func.id)  # type: ignore[union-attr]
-        alias = str(node.args[0].id)  # type: ignore[union-attr]
-        periods = int(node.args[1].value)  # type: ignore[union-attr]
+        func_name = str(node.func.id)  # type: ignore[attr-defined]
+        alias = str(node.args[0].id)  # type: ignore[attr-defined]
+        periods = int(node.args[1].value)  # type: ignore[attr-defined]
         base = _coerce_series_numeric(env[alias])
         if func_name == "lag":
             return base.shift(periods=periods)
@@ -836,7 +836,7 @@ class PITAccessor:
                 return None
             row = subset.iloc[0]
         elif mode == "horizon":
-            horizon = pd.Timedelta(value)  # type: ignore[arg-type]
+            horizon = pd.Timedelta(value)
             cutoff = pd.Timestamp(selected.iloc[0]["obs_date"]) + horizon
             if asof is not None:
                 asof_ts = to_utc_aware(asof)
@@ -915,7 +915,7 @@ class PITAccessor:
                     continue
                 selected = group.iloc[[rank - 1]]
             elif mode == "horizon":
-                horizon = pd.Timedelta(value)  # type: ignore[arg-type]
+                horizon = pd.Timedelta(value)
                 cutoff = pd.Timestamp(obs_date) + horizon
                 cutoff = min(cutoff, to_utc_aware(asof))
                 window = group[group["asof_utc"] <= cutoff]
