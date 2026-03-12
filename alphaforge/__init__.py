@@ -48,13 +48,13 @@ from .pit.models import (
     PITExpressionGraphSpec,
     PITExpressionNode,
     PITFoldSpec,
-    PITTapeSpec,
     PITSequenceMode,
+    PITTapeSpec,
     ReleaseRecord,
     ReleaseSelectionPolicy,
     SnapshotSeriesSpec,
-    coerce_pit_tape_spec,
     coerce_expression_graph_spec,
+    coerce_pit_tape_spec,
     coerce_snapshot_series_spec,
 )
 from .pit.pipelines import (

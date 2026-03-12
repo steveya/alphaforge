@@ -5,10 +5,11 @@ from typing import Iterator, Mapping, Sequence
 
 import pandas as pd
 
+from alphaforge.time.ref_period import RefPeriod
+
 from .accessor import PITAccessor, to_utc_aware, to_utc_naive
 from .exceptions import PITContractError
 from .models import PITFoldSpec, PITTapeSpec, coerce_pit_tape_spec
-from alphaforge.time.ref_period import RefPeriod
 
 
 @dataclass(frozen=True)
@@ -380,7 +381,7 @@ def iter_walk_forward_folds(
     if train_size is None and min_train_size is None:
         raise PITContractError("Provide train_size or min_train_size for walk-forward folds.")
 
-    required_train = train_size if train_size is not None else int(min_train_size)
+    required_train = train_size if train_size is not None else min_train_size
     assert required_train is not None
 
     fold_num = 0

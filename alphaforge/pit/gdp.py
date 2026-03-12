@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from .accessor import PITAccessor, _PIT_TABLE, to_utc_aware, to_utc_naive
+from .accessor import _PIT_TABLE, PITAccessor, to_utc_aware, to_utc_naive
 from .models import PITExpressionGraphResult, PITExpressionGraphSpec, PITExpressionNode
 
 GDPC1_QOQ_SAAR_RF_RT_SERIES_KEY = "GDPC1_QOQ_SAAR_RF_RT"
