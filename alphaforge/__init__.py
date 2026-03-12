@@ -47,9 +47,13 @@ from .pit.models import (
     PITExpressionGraphResult,
     PITExpressionGraphSpec,
     PITExpressionNode,
+    PITFoldSpec,
+    PITTapeSpec,
+    PITSequenceMode,
     ReleaseRecord,
     ReleaseSelectionPolicy,
     SnapshotSeriesSpec,
+    coerce_pit_tape_spec,
     coerce_expression_graph_spec,
     coerce_snapshot_series_spec,
 )
@@ -61,8 +65,11 @@ from .pit.pipelines import (
 )
 from .pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .pit.tasks import (
+    build_snapshot_tape,
     first_vintage_snapshot,
     forward_fill_with_staleness,
+    iter_purged_kfold_folds,
+    iter_walk_forward_folds,
     latest_vintage_snapshot,
     qoq,
     revision_deltas,
@@ -149,6 +156,10 @@ __all__ = [
     "PITExpressionGraphSpec",
     "PITExpressionGraphResult",
     "coerce_expression_graph_spec",
+    "PITFoldSpec",
+    "PITTapeSpec",
+    "PITSequenceMode",
+    "coerce_pit_tape_spec",
     "ReleaseSelectionPolicy",
     "ReleaseRecord",
     "SnapshotSeriesSpec",
@@ -172,6 +183,9 @@ __all__ = [
     "forward_fill_with_staleness",
     "yoy",
     "qoq",
+    "iter_walk_forward_folds",
+    "iter_purged_kfold_folds",
+    "build_snapshot_tape",
     "make_ref_entity_id",
     "parse_ref_entity_id",
 ]

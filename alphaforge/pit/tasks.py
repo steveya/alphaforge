@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterator, Mapping, Sequence
 
 import pandas as pd
 
 from .accessor import PITAccessor, to_utc_aware, to_utc_naive
 from .exceptions import PITContractError
+from .models import PITFoldSpec, PITTapeSpec, coerce_pit_tape_spec
+from alphaforge.time.ref_period import RefPeriod
 
 
 @dataclass(frozen=True)
@@ -334,3 +337,200 @@ def yoy(snapshot: pd.Series, periods: int = 12) -> pd.Series:
 
 def qoq(snapshot: pd.Series, periods: int = 1) -> pd.Series:
     return snapshot.sort_index().pct_change(periods=periods)
+
+
+def _normalize_asof_grid(
+    asof_grid: Sequence[pd.Timestamp] | pd.DatetimeIndex,
+) -> pd.DatetimeIndex:
+    idx = pd.DatetimeIndex(pd.to_datetime(asof_grid, utc=True))
+    if len(idx) == 0:
+        raise PITContractError("asof_grid must contain at least one timestamp.")
+    return idx.sort_values().unique()
+
+
+def _resolve_snapshot_window(
+    start_ref: str | None,
+    end_ref: str | None,
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    start_obs = RefPeriod.parse(start_ref).end_obs_date() if start_ref is not None else None
+    end_obs = RefPeriod.parse(end_ref).end_obs_date() if end_ref is not None else None
+    return start_obs, end_obs
+
+
+def iter_walk_forward_folds(
+    asof_grid: Sequence[pd.Timestamp] | pd.DatetimeIndex,
+    *,
+    train_size: int | None = None,
+    min_train_size: int | None = None,
+    validation_size: int = 1,
+    step: int = 1,
+    purge: int = 0,
+) -> Iterator[PITFoldSpec]:
+    grid = _normalize_asof_grid(asof_grid)
+    if validation_size <= 0:
+        raise PITContractError("validation_size must be > 0.")
+    if step <= 0:
+        raise PITContractError("step must be > 0.")
+    if purge < 0:
+        raise PITContractError("purge must be >= 0.")
+    if train_size is not None and train_size <= 0:
+        raise PITContractError("train_size must be > 0 when provided.")
+    if min_train_size is not None and min_train_size <= 0:
+        raise PITContractError("min_train_size must be > 0 when provided.")
+    if train_size is None and min_train_size is None:
+        raise PITContractError("Provide train_size or min_train_size for walk-forward folds.")
+
+    required_train = train_size if train_size is not None else int(min_train_size)
+    assert required_train is not None
+
+    fold_num = 0
+    latest_start = len(grid) - validation_size
+    for validation_start in range(required_train + purge, latest_start + 1, step):
+        train_stop = validation_start - purge
+        if train_stop <= 0:
+            continue
+        if train_size is None:
+            train_slice = grid[:train_stop]
+            if min_train_size is not None and len(train_slice) < min_train_size:
+                continue
+        else:
+            train_start = train_stop - train_size
+            if train_start < 0:
+                continue
+            train_slice = grid[train_start:train_stop]
+        validation_slice = grid[validation_start : validation_start + validation_size]
+        if len(train_slice) == 0 or len(validation_slice) == 0:
+            continue
+        yield PITFoldSpec(
+            fold_id=f"walk_forward_{fold_num:03d}",
+            fold_mode="walk_forward",
+            train_asofs=tuple(pd.Timestamp(ts) for ts in train_slice),
+            validation_asofs=tuple(pd.Timestamp(ts) for ts in validation_slice),
+            purge=purge,
+            embargo=0,
+        )
+        fold_num += 1
+
+
+def iter_purged_kfold_folds(
+    asof_grid: Sequence[pd.Timestamp] | pd.DatetimeIndex,
+    *,
+    n_splits: int = 5,
+    purge: int = 0,
+    embargo: int = 0,
+) -> Iterator[PITFoldSpec]:
+    grid = _normalize_asof_grid(asof_grid)
+    if n_splits <= 1:
+        raise PITContractError("n_splits must be > 1.")
+    if n_splits > len(grid):
+        raise PITContractError("n_splits cannot exceed the number of as-of timestamps.")
+    if purge < 0:
+        raise PITContractError("purge must be >= 0.")
+    if embargo < 0:
+        raise PITContractError("embargo must be >= 0.")
+
+    fold_sizes = [len(grid) // n_splits] * n_splits
+    for idx in range(len(grid) % n_splits):
+        fold_sizes[idx] += 1
+
+    start_idx = 0
+    for fold_num, fold_size in enumerate(fold_sizes):
+        stop_idx = start_idx + fold_size
+        validation_slice = grid[start_idx:stop_idx]
+        left_stop = max(0, start_idx - purge)
+        right_start = min(len(grid), stop_idx + embargo)
+        train_slice = grid[:left_stop].append(grid[right_start:])
+
+        yield PITFoldSpec(
+            fold_id=f"purged_kfold_{fold_num:03d}",
+            fold_mode="purged_kfold",
+            train_asofs=tuple(pd.Timestamp(ts) for ts in train_slice),
+            validation_asofs=tuple(pd.Timestamp(ts) for ts in validation_slice),
+            purge=purge,
+            embargo=embargo,
+        )
+        start_idx = stop_idx
+
+
+def build_snapshot_tape(
+    pit: PITAccessor,
+    spec: PITTapeSpec | Mapping[str, object],
+    *,
+    allow_research: bool = False,
+) -> pd.DataFrame:
+    tape_spec = coerce_pit_tape_spec(spec)
+    if tape_spec.mode == "smoothed_research" and not allow_research:
+        raise PITContractError(
+            "mode='smoothed_research' requires allow_research=True."
+        )
+
+    terminal_asof = (
+        max(tape_spec.step_asofs)
+        if tape_spec.mode == "smoothed_research" and tape_spec.terminal_asof is None
+        else tape_spec.terminal_asof
+    )
+
+    rows: list[pd.DataFrame] = []
+    for step_asof in tape_spec.step_asofs:
+        materialized_asof = (
+            pd.Timestamp(step_asof)
+            if tape_spec.mode == "filtered"
+            else pd.Timestamp(terminal_asof)
+        )
+        for series_spec in tape_spec.series_specs:
+            start_obs, end_obs = _resolve_snapshot_window(
+                series_spec.start_ref,
+                series_spec.end_ref,
+            )
+            snapshot_rows = pit._snapshot_rows_with_release_policy(
+                series_spec.series_key,
+                materialized_asof,
+                policy=series_spec.release_policy,
+                start=start_obs,
+                end=end_obs,
+            )
+            if snapshot_rows.empty:
+                continue
+
+            frame = snapshot_rows.copy()
+            frame["step_asof_utc"] = pd.Timestamp(step_asof)
+            frame["materialized_asof_utc"] = materialized_asof
+            frame["series_key"] = series_spec.series_key
+            frame["series_alias"] = series_spec.alias or series_spec.series_key
+            frame["sequence_mode"] = tape_spec.mode
+            rows.append(
+                frame[
+                    [
+                        "step_asof_utc",
+                        "materialized_asof_utc",
+                        "obs_date",
+                        "series_key",
+                        "series_alias",
+                        "value",
+                        "source_asof_utc",
+                        "sequence_mode",
+                    ]
+                ]
+            )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "step_asof_utc",
+                "materialized_asof_utc",
+                "obs_date",
+                "series_key",
+                "series_alias",
+                "value",
+                "source_asof_utc",
+                "sequence_mode",
+            ]
+        )
+
+    out = pd.concat(rows, ignore_index=True)
+    for column in ["step_asof_utc", "materialized_asof_utc", "obs_date", "source_asof_utc"]:
+        out[column] = pd.to_datetime(out[column], utc=True)
+    out["value"] = pd.to_numeric(out["value"], errors="coerce")
+    return out.sort_values(
+        ["step_asof_utc", "series_alias", "obs_date", "source_asof_utc"]
+    ).reset_index(drop=True)

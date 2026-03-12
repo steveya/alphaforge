@@ -7,6 +7,7 @@ from .b3_historical_quotes import B3HistoricalQuotesDataSource
 from .bcb_sgs import BCBSGSDataSource
 from .bea import BEADataSource
 from .bls import BLSDataSource
+from .cftc_cot import CFTCCoTSource
 from .cftc_swaps_weekly import CFTCWeeklySwapsSource
 from .cme_productslate_reference import CMEProductSlateSource
 from .destatis_genesis import DestatisGenesisDataSource
@@ -39,6 +40,7 @@ def default_public_web_sources() -> dict[str, DataSource]:
         DTCCPPDSource(),
         CMEProductSlateSource(),
         CFTCWeeklySwapsSource(),
+        CFTCCoTSource(),
         EurexStatsDailySource(),
         LCHCDSClearDailySource(),
         EzoicAdRevenueDailySource(),

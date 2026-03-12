@@ -22,7 +22,7 @@ Use these for deterministic handling in client code instead of parsing generic e
 
 Allowed operators by axis:
 
-- `obs_path`: `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `binary`, `path_apply`
+- `obs_path`: `resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `pct_change`, `ffill`, `binary`, `coalesce`, `splice`, `path_apply`
 - `revision_path` (experimental): `rolling`, `expanding`, `lag`, `diff`
 
 Unknown parameter keys are rejected per operator.
@@ -33,6 +33,38 @@ Unknown parameter keys are rejected per operator.
 - `operator` in `add | sub | mul | div`
 - `join` in `inner | left | right | outer` (default `inner`)
 - optional `fill_value`
+
+`coalesce` operator contract (`obs_path` only):
+
+- `input_series_key` is the highest-precedence source
+- `other_series_keys` is required and defines fallback precedence order
+- output alignment is on the union of obs dates visible inside each as-of snapshot
+- row lineage records `selected_input_series_key` and `selected_input_asof_utc`
+
+`splice` operator contract (`obs_path` only):
+
+- `right_series_key` is required
+- `adjustment` is required and must be `ratio` or `add`
+- optional `transition_periods >= 0` controls PIT-safe linear blending during handoff
+- optional `join` controls obs-date alignment and defaults to `outer`
+- calibration uses the last overlapping non-null point visible in the same as-of snapshot
+- if no overlap is visible yet, adjusted handoff rows remain unavailable until calibration exists
+- row lineage records:
+  - left/right source as-of timestamps
+  - anchor obs date
+  - anchor left/right values
+  - computed scale/offset
+  - transition weights
+
+`pct_change` / `ffill` contract (`obs_path` only):
+
+- `pct_change` requires `periods > 0` and matches pandas `fill_method=None`
+- `ffill` accepts optional `limit > 0`
+
+Aggregation contract:
+
+- `resample`, `aggregate`, `rolling`, and `expanding` support `first`, `last`, `min`, `max`, `mean`, `sum`, `count`, `std`, `var`
+- `std` and `var` follow sample statistics semantics (`ddof=1`)
 
 ## Pipeline contract
 
@@ -58,12 +90,65 @@ Incremental controls:
 - `since_run_id` anchors to a prior pipeline run
 - if no explicit anchor is provided, incremental runs anchor to the previous successful run’s max output as-of
 
+## PIT fold contract
+
+PIT fold generators operate on explicit as-of grids and yield `PITFoldSpec` outputs.
+
+Fold output fields:
+
+- `fold_id`
+- `fold_mode` in `walk_forward | purged_kfold`
+- `train_asofs`
+- `validation_asofs`
+- `purge`
+- `embargo`
+
+Fold APIs:
+
+- `iter_walk_forward_folds(...)`
+- `iter_purged_kfold_folds(...)`
+
+Semantics:
+
+- folds are derived from sorted unique as-of timestamps
+- purge and embargo are counts on the provided as-of grid, not business-day offsets
+- walk-forward folds are decision-safe by construction because training as-ofs are strictly earlier than validation as-ofs
+
+## PIT tape contract
+
+`PITTapeSpec` defines a snapshot-tape materialization request:
+
+- `series_specs`
+- `step_asofs`
+- `mode` in `filtered | smoothed_research`
+- optional `terminal_asof` for retrospective materialization
+
+Tape API:
+
+- `build_snapshot_tape(...)`
+
+Tape output columns:
+
+- `step_asof_utc`
+- `materialized_asof_utc`
+- `obs_date`
+- `series_key`
+- `series_alias`
+- `value`
+- `source_asof_utc`
+- `sequence_mode`
+
+Mode semantics:
+
+- `filtered` is the default live/validation-safe mode. Each step uses only data visible at that step’s own as-of.
+- `smoothed_research` is explicit retrospective mode. Each step uses a terminal retrospective as-of and requires `allow_research=True`.
+
 ## Engine contract
 
 PIT transforms support two execution backends:
 
-- `duckdb`: built-ins (`resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`) with supported parameters
-- `python`: full v1 operator coverage (including `path_apply` and `binary`)
+- `duckdb`: built-ins (`resample`, `aggregate`, `rolling`, `expanding`, `lag`, `diff`, `pct_change`) with supported parameters
+- `python`: full operator coverage (including `ffill`, `coalesce`, `splice`, `path_apply`, and `binary`)
 
 - `engine="auto"` -> uses `duckdb` for supported specs, otherwise `python`
 - `engine="python"` -> uses `python`

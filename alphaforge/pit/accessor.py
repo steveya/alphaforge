@@ -45,11 +45,14 @@ from .transforms import (
     PITTransformResult,
     PITTransformSpec,
     apply_binary_obs_path_transform,
+    apply_coalesce_obs_path_transform,
     apply_obs_path_transform,
+    apply_splice_obs_path_transform,
     apply_revision_path_transform,
     coerce_transform_spec,
     resolve_engine,
     serialize_params_for_lineage,
+    transform_input_series_keys,
     validate_transform_spec,
 )
 from .validation import validate_pit_observations
@@ -617,6 +620,98 @@ class PITAccessor:
         if method != "latest_leq":
             raise PITUnsupportedOperationError(f"Unsupported snapshot method: {method}")
 
+        df = self._get_snapshot_rows_with_source_asof(
+            series_key,
+            asof,
+            start=start,
+            end=end,
+        )
+        if df.empty:
+            return pd.Series(dtype="float64", name=series_key)
+
+        series = pd.Series(
+            df["value"].to_numpy(),
+            index=to_utc_aware(df["obs_date"]),
+            name=series_key,
+        )
+        series.index.name = "obs_date"
+        return series
+
+    def get_snapshot_multi(
+        self,
+        series_keys: Sequence[str],
+        asof: pd.Timestamp,
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+        method: Literal["latest_leq"] = "latest_leq",
+    ) -> pd.DataFrame:
+        if method != "latest_leq":
+            raise PITUnsupportedOperationError(f"Unsupported snapshot method: {method}")
+
+        unique_keys = sorted({str(k) for k in series_keys if str(k).strip()})
+        if not unique_keys:
+            return pd.DataFrame(
+                {
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                }
+            )
+
+        asof_ts = to_utc_naive(asof)
+        start_ts = to_utc_naive(start)
+        end_ts = to_utc_naive(end)
+        placeholders = ", ".join(["?"] * len(unique_keys))
+        filters = [f"series_key IN ({placeholders})", "asof_utc <= ?"]
+        params: list[object] = [*unique_keys, asof_ts]
+        if start_ts is not None:
+            filters.append("obs_date >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            filters.append("obs_date <= ?")
+            params.append(end_ts)
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT series_key, obs_date, value
+            FROM (
+                SELECT
+                    series_key,
+                    obs_date,
+                    value,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY series_key, obs_date
+                        ORDER BY asof_utc DESC
+                    ) AS rn
+                FROM {_PIT_TABLE}
+                WHERE {where_clause}
+            ) ranked
+            WHERE rn = 1
+            ORDER BY series_key, obs_date
+        """
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return pd.DataFrame(
+                {
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                }
+            )
+
+        out = df.copy()
+        out["obs_date"] = to_utc_aware(out["obs_date"])
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+        return out.reset_index(drop=True)
+
+    def _get_snapshot_rows_with_source_asof(
+        self,
+        series_key: str,
+        asof: pd.Timestamp,
+        *,
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
         asof_ts = to_utc_naive(asof)
         start_ts = to_utc_naive(start)
         end_ts = to_utc_naive(end)
@@ -632,10 +727,11 @@ class PITAccessor:
 
         where_clause = " AND ".join(filters)
         query = f"""
-            SELECT obs_date, value
+            SELECT obs_date, source_asof_utc, value
             FROM (
                 SELECT
                     obs_date,
+                    asof_utc AS source_asof_utc,
                     value,
                     ROW_NUMBER() OVER (
                         PARTITION BY obs_date
@@ -649,15 +745,11 @@ class PITAccessor:
         """
         df = self.conn.execute(query, params).fetchdf()
         if df.empty:
-            return pd.Series(dtype="float64", name=series_key)
+            return df
 
-        series = pd.Series(
-            df["value"].to_numpy(),
-            index=to_utc_aware(df["obs_date"]),
-            name=series_key,
-        )
-        series.index.name = "obs_date"
-        return series
+        df["obs_date"] = to_utc_aware(df["obs_date"])
+        df["source_asof_utc"] = to_utc_aware(df["source_asof_utc"])
+        return df
 
     def get_revision_timeline(
         self,
@@ -697,6 +789,141 @@ class PITAccessor:
         )
         series.index.name = "asof_utc"
         return series
+
+    def get_revision_path(
+        self,
+        series_key: str,
+        obs_date: pd.Timestamp,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        obs_ts = to_utc_naive(obs_date)
+        start_ts = to_utc_naive(start_asof)
+        end_ts = to_utc_naive(end_asof)
+
+        filters = ["series_key = ?", "obs_date = ?"]
+        params: list[object] = [series_key, obs_ts]
+        if start_ts is not None:
+            filters.append("asof_utc >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            filters.append("asof_utc <= ?")
+            params.append(end_ts)
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT series_key, obs_date, asof_utc, value, revision_id
+            FROM {_PIT_TABLE}
+            WHERE {where_clause}
+            ORDER BY asof_utc ASC
+        """
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return pd.DataFrame(
+                {
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                    "revision_id": pd.Series(dtype="object"),
+                }
+            )
+
+        out = df.copy()
+        out["obs_date"] = to_utc_aware(out["obs_date"])
+        out["asof_utc"] = to_utc_aware(out["asof_utc"])
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+        return out.reset_index(drop=True)
+
+    def get_revision_path_multi(self, requests: pd.DataFrame) -> pd.DataFrame:
+        required = {"request_id", "series_key", "obs_date"}
+        missing = required - set(requests.columns)
+        if missing:
+            raise PITContractError(
+                f"Revision path requests missing required columns: {sorted(missing)}"
+            )
+
+        if requests.empty:
+            return pd.DataFrame(
+                {
+                    "request_id": pd.Series(dtype="object"),
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                    "revision_id": pd.Series(dtype="object"),
+                }
+            )
+
+        req = requests.copy()
+        req["obs_date"] = pd.to_datetime(req["obs_date"], utc=True, errors="coerce")
+        if "start_asof" in req.columns:
+            req["start_asof"] = pd.to_datetime(req["start_asof"], utc=True, errors="coerce")
+        else:
+            req["start_asof"] = pd.NaT
+        if "end_asof" in req.columns:
+            req["end_asof"] = pd.to_datetime(req["end_asof"], utc=True, errors="coerce")
+        else:
+            req["end_asof"] = pd.NaT
+        req = req.dropna(subset=["request_id", "series_key", "obs_date"]).copy()
+        if req.empty:
+            return pd.DataFrame(
+                {
+                    "request_id": pd.Series(dtype="object"),
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                    "revision_id": pd.Series(dtype="object"),
+                }
+            )
+
+        normalized = req.loc[
+            :, ["request_id", "series_key", "obs_date", "start_asof", "end_asof"]
+        ].copy()
+        normalized["obs_date"] = to_utc_naive(normalized["obs_date"])
+        normalized["start_asof"] = to_utc_naive(normalized["start_asof"])
+        normalized["end_asof"] = to_utc_naive(normalized["end_asof"])
+        self.conn.register("pit_revision_path_requests", normalized)
+        try:
+            df = self.conn.execute(
+                f"""
+                SELECT
+                    r.request_id,
+                    p.series_key,
+                    p.obs_date,
+                    p.asof_utc,
+                    p.value,
+                    p.revision_id
+                FROM pit_revision_path_requests r
+                INNER JOIN {_PIT_TABLE} p
+                    ON p.series_key = r.series_key
+                   AND p.obs_date = r.obs_date
+                WHERE (r.start_asof IS NULL OR p.asof_utc >= r.start_asof)
+                  AND (r.end_asof IS NULL OR p.asof_utc <= r.end_asof)
+                ORDER BY r.request_id, p.asof_utc ASC
+                """
+            ).fetchdf()
+        finally:
+            self.conn.unregister("pit_revision_path_requests")
+
+        if df.empty:
+            return pd.DataFrame(
+                {
+                    "request_id": pd.Series(dtype="object"),
+                    "series_key": pd.Series(dtype="object"),
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                    "revision_id": pd.Series(dtype="object"),
+                }
+            )
+
+        out = df.copy()
+        out["obs_date"] = to_utc_aware(out["obs_date"])
+        out["asof_utc"] = to_utc_aware(out["asof_utc"])
+        out["value"] = pd.to_numeric(out["value"], errors="coerce")
+        return out.reset_index(drop=True)
 
     def get_revision_timeline_ref(
         self,
@@ -876,9 +1103,41 @@ class PITAccessor:
         start: pd.Timestamp | None = None,
         end: pd.Timestamp | None = None,
     ) -> pd.Series:
+        rows = self._snapshot_rows_with_release_policy(
+            series_key,
+            asof,
+            policy=policy,
+            start=start,
+            end=end,
+        )
+        if rows.empty:
+            return pd.Series(dtype="float64", name=series_key)
+
+        out = pd.Series(
+            rows["value"].to_numpy(),
+            index=pd.DatetimeIndex(rows["obs_date"]),
+            name=series_key,
+        ).sort_index()
+        out.index.name = "obs_date"
+        return out
+
+    def _snapshot_rows_with_release_policy(
+        self,
+        series_key: str,
+        asof: pd.Timestamp,
+        *,
+        policy: ReleaseSelectionPolicy | Mapping[str, Any] | str = "latest",
+        start: pd.Timestamp | None = None,
+        end: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
         mode, value = normalize_release_selection_policy(policy)
         if mode == "latest":
-            return self.get_snapshot(series_key, asof, start=start, end=end)
+            return self._get_snapshot_rows_with_source_asof(
+                series_key,
+                asof,
+                start=start,
+                end=end,
+            )
 
         filters = ["series_key = ?", "asof_utc <= ?"]
         params: list[object] = [series_key, to_utc_naive(asof)]
@@ -898,7 +1157,13 @@ class PITAccessor:
         """
         df = self.conn.execute(query, params).fetchdf()
         if df.empty:
-            return pd.Series(dtype="float64", name=series_key)
+            return pd.DataFrame(
+                {
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                }
+            )
 
         df["obs_date"] = to_utc_aware(df["obs_date"])
         df["asof_utc"] = to_utc_aware(df["asof_utc"])
@@ -927,16 +1192,20 @@ class PITAccessor:
             selected_chunks.append(selected)
 
         if not selected_chunks:
-            return pd.Series(dtype="float64", name=series_key)
+            return pd.DataFrame(
+                {
+                    "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "value": pd.Series(dtype="float64"),
+                }
+            )
 
-        selected_df = pd.concat(selected_chunks, ignore_index=True)
-        out = pd.Series(
-            selected_df["value"].to_numpy(),
-            index=pd.DatetimeIndex(selected_df["obs_date"]),
-            name=series_key,
-        ).sort_index()
-        out.index.name = "obs_date"
-        return out
+        selected_df = pd.concat(selected_chunks, ignore_index=True).rename(
+            columns={"asof_utc": "source_asof_utc"}
+        )
+        return selected_df[["obs_date", "source_asof_utc", "value"]].sort_values(
+            "obs_date"
+        ).reset_index(drop=True)
 
     @staticmethod
     def _align_snapshot_index(
@@ -1101,12 +1370,7 @@ class PITAccessor:
 
     @staticmethod
     def _input_series_keys_for_spec(spec: PITTransformSpec) -> list[str]:
-        keys = [spec.input_series_key]
-        if spec.op == "binary":
-            right_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
-            if right_key:
-                keys.append(right_key)
-        return keys
+        return transform_input_series_keys(spec)
 
     def _insert_transform_run(
         self,
@@ -1389,6 +1653,9 @@ class PITAccessor:
         engine_resolution: PITEngineResolution,
         source_asof: pd.Timestamp | None = None,
         source_asof_by_series: Mapping[str, pd.Timestamp] | None = None,
+        selected_input_series_key: str | None = None,
+        selected_input_asof: pd.Timestamp | None = None,
+        lineage_extra: Mapping[str, object] | None = None,
     ) -> str:
         payload: dict[str, object] = {
             "transform_id": transform_id,
@@ -1410,6 +1677,20 @@ class PITAccessor:
             payload["source_asof_by_series_utc"] = {
                 key: ts.isoformat() for key, ts in source_asof_by_series.items()
             }
+        if selected_input_series_key is not None:
+            payload["selected_input_series_key"] = selected_input_series_key
+        if selected_input_asof is not None:
+            payload["selected_input_asof_utc"] = selected_input_asof.isoformat()
+        if lineage_extra:
+            for key, value in lineage_extra.items():
+                if value is None:
+                    payload[key] = None
+                elif isinstance(value, pd.Timestamp):
+                    payload[key] = value.isoformat()
+                elif isinstance(value, pd.Timedelta):
+                    payload[key] = str(value)
+                else:
+                    payload[key] = value
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def _list_candidate_asofs_multi(
@@ -1572,6 +1853,261 @@ class PITAccessor:
                     right_snapshot,
                     spec,
                 ).dropna()
+                if transformed.empty:
+                    continue
+                if start_obs_utc is not None:
+                    transformed = transformed[transformed.index >= start_obs_utc]
+                if end_obs_utc is not None:
+                    transformed = transformed[transformed.index <= end_obs_utc]
+                if transformed.empty:
+                    continue
+
+                meta_json = self._lineage_meta(
+                    transform_id=transform_id,
+                    spec=spec,
+                    engine_resolution=engine_resolution,
+                    source_asof=source_asof_by_series.get(spec.input_series_key),
+                    source_asof_by_series=source_asof_by_series,
+                )
+                chunks.append(
+                    pd.DataFrame(
+                        {
+                            "series_key": spec.output_series_key,
+                            "obs_date": transformed.index,
+                            "asof_utc": [asof] * len(transformed),
+                            "value": transformed.to_numpy(),
+                            "source": [f"pit_transform:{transform_id}"] * len(transformed),
+                            "meta_json": [meta_json] * len(transformed),
+                        }
+                    )
+                )
+                continue
+            if spec.op == "coalesce":
+                snapshots: dict[str, pd.Series] = {}
+                source_asof_by_series_obs: dict[str, dict[pd.Timestamp, pd.Timestamp]] = {}
+                for series_key in input_keys:
+                    snapshot_rows = self._get_snapshot_rows_with_source_asof(
+                        series_key,
+                        source_asof_by_series[series_key],
+                        start=start_obs,
+                        end=end_obs,
+                    )
+                    if snapshot_rows.empty:
+                        snapshots[series_key] = pd.Series(dtype="float64", name=series_key)
+                        source_asof_by_series_obs[series_key] = {}
+                        continue
+                    snapshot_series = pd.Series(
+                        snapshot_rows["value"].to_numpy(),
+                        index=pd.DatetimeIndex(snapshot_rows["obs_date"]),
+                        name=series_key,
+                    )
+                    snapshot_series.index.name = "obs_date"
+                    snapshots[series_key] = snapshot_series
+                    source_asof_by_series_obs[series_key] = {
+                        pd.Timestamp(obs_date): pd.Timestamp(source_asof_utc)
+                        for obs_date, source_asof_utc in zip(
+                            snapshot_rows["obs_date"],
+                            snapshot_rows["source_asof_utc"],
+                            strict=False,
+                        )
+                    }
+                transformed_df = apply_coalesce_obs_path_transform(snapshots, spec)
+                if transformed_df.empty:
+                    continue
+                if start_obs_utc is not None:
+                    transformed_df = transformed_df[transformed_df.index >= start_obs_utc]
+                if end_obs_utc is not None:
+                    transformed_df = transformed_df[transformed_df.index <= end_obs_utc]
+                if transformed_df.empty:
+                    continue
+
+                row_meta = [
+                    self._lineage_meta(
+                        transform_id=transform_id,
+                        spec=spec,
+                        engine_resolution=engine_resolution,
+                        source_asof=source_asof_by_series.get(spec.input_series_key),
+                        source_asof_by_series=source_asof_by_series,
+                        selected_input_series_key=(
+                            str(selected_key)
+                            if pd.notna(selected_key)
+                            else None
+                        ),
+                        selected_input_asof=(
+                            source_asof_by_series_obs.get(str(selected_key), {}).get(pd.Timestamp(obs_date))
+                            if pd.notna(selected_key)
+                            else None
+                        ),
+                    )
+                    for obs_date, selected_key in zip(
+                        transformed_df.index,
+                        transformed_df["selected_input_series_key"].tolist(),
+                        strict=False,
+                    )
+                ]
+                chunks.append(
+                    pd.DataFrame(
+                        {
+                            "series_key": spec.output_series_key,
+                            "obs_date": transformed_df.index,
+                            "asof_utc": [asof] * len(transformed_df),
+                            "value": transformed_df["value"].to_numpy(),
+                            "source": [f"pit_transform:{transform_id}"] * len(transformed_df),
+                            "meta_json": row_meta,
+                        }
+                    )
+                )
+                continue
+            if spec.op == "splice":
+                right_series_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
+                if not right_series_key:
+                    raise PITValidationError(
+                        "splice transform requires params['right_series_key']."
+                    )
+
+                left_rows = self._get_snapshot_rows_with_source_asof(
+                    spec.input_series_key,
+                    source_asof_by_series[spec.input_series_key],
+                    start=start_obs,
+                    end=end_obs,
+                )
+                right_rows = self._get_snapshot_rows_with_source_asof(
+                    right_series_key,
+                    source_asof_by_series[right_series_key],
+                    start=start_obs,
+                    end=end_obs,
+                )
+
+                left_snapshot = (
+                    pd.Series(
+                        left_rows["value"].to_numpy(),
+                        index=pd.DatetimeIndex(left_rows["obs_date"]),
+                        name=spec.input_series_key,
+                    )
+                    if not left_rows.empty
+                    else pd.Series(dtype="float64", name=spec.input_series_key)
+                )
+                right_snapshot = (
+                    pd.Series(
+                        right_rows["value"].to_numpy(),
+                        index=pd.DatetimeIndex(right_rows["obs_date"]),
+                        name=right_series_key,
+                    )
+                    if not right_rows.empty
+                    else pd.Series(dtype="float64", name=right_series_key)
+                )
+
+                left_source_asof_by_obs = {
+                    pd.Timestamp(obs_date): pd.Timestamp(source_asof_utc)
+                    for obs_date, source_asof_utc in zip(
+                        left_rows["obs_date"],
+                        left_rows["source_asof_utc"],
+                        strict=False,
+                    )
+                }
+                right_source_asof_by_obs = {
+                    pd.Timestamp(obs_date): pd.Timestamp(source_asof_utc)
+                    for obs_date, source_asof_utc in zip(
+                        right_rows["obs_date"],
+                        right_rows["source_asof_utc"],
+                        strict=False,
+                    )
+                }
+
+                transformed_df = apply_splice_obs_path_transform(
+                    left_snapshot,
+                    right_snapshot,
+                    spec,
+                )
+                if transformed_df.empty:
+                    continue
+                if start_obs_utc is not None:
+                    transformed_df = transformed_df[transformed_df.index >= start_obs_utc]
+                if end_obs_utc is not None:
+                    transformed_df = transformed_df[transformed_df.index <= end_obs_utc]
+                if transformed_df.empty:
+                    continue
+
+                transition_periods = int(spec.sanitized_params().get("transition_periods", 0))
+                row_meta = []
+                for obs_date, row in transformed_df.iterrows():
+                    selected_key = (
+                        str(row["selected_input_series_key"])
+                        if pd.notna(row["selected_input_series_key"])
+                        else None
+                    )
+                    selected_input_asof: pd.Timestamp | None = None
+                    if selected_key == spec.input_series_key:
+                        selected_input_asof = left_source_asof_by_obs.get(pd.Timestamp(obs_date))
+                    elif selected_key == right_series_key:
+                        selected_input_asof = right_source_asof_by_obs.get(pd.Timestamp(obs_date))
+
+                    row_meta.append(
+                        self._lineage_meta(
+                            transform_id=transform_id,
+                            spec=spec,
+                            engine_resolution=engine_resolution,
+                            source_asof=source_asof_by_series.get(spec.input_series_key),
+                            source_asof_by_series=source_asof_by_series,
+                            selected_input_series_key=selected_key,
+                            selected_input_asof=selected_input_asof,
+                            lineage_extra={
+                                "splice_state": (
+                                    str(row["splice_state"])
+                                    if pd.notna(row["splice_state"])
+                                    else None
+                                ),
+                                "splice_left_input_asof_utc": left_source_asof_by_obs.get(
+                                    pd.Timestamp(obs_date)
+                                ),
+                                "splice_right_input_asof_utc": right_source_asof_by_obs.get(
+                                    pd.Timestamp(obs_date)
+                                ),
+                                "splice_anchor_obs_date_utc": (
+                                    pd.Timestamp(row["splice_anchor_obs_date"])
+                                    if pd.notna(row["splice_anchor_obs_date"])
+                                    else None
+                                ),
+                                "splice_anchor_left_value": (
+                                    float(row["splice_anchor_left_value"])
+                                    if pd.notna(row["splice_anchor_left_value"])
+                                    else None
+                                ),
+                                "splice_anchor_right_value": (
+                                    float(row["splice_anchor_right_value"])
+                                    if pd.notna(row["splice_anchor_right_value"])
+                                    else None
+                                ),
+                                "splice_scale": (
+                                    float(row["splice_scale"])
+                                    if pd.notna(row["splice_scale"])
+                                    else None
+                                ),
+                                "splice_offset": (
+                                    float(row["splice_offset"])
+                                    if pd.notna(row["splice_offset"])
+                                    else None
+                                ),
+                                "splice_transition_periods": transition_periods,
+                                "splice_left_weight": float(row["splice_left_weight"]),
+                                "splice_right_weight": float(row["splice_right_weight"]),
+                            },
+                        )
+                    )
+
+                chunks.append(
+                    pd.DataFrame(
+                        {
+                            "series_key": spec.output_series_key,
+                            "obs_date": transformed_df.index,
+                            "asof_utc": [asof] * len(transformed_df),
+                            "value": transformed_df["value"].to_numpy(),
+                            "source": [f"pit_transform:{transform_id}"] * len(transformed_df),
+                            "meta_json": row_meta,
+                        }
+                    )
+                )
+                continue
             else:
                 snapshot = self.get_snapshot(
                     spec.input_series_key,

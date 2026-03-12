@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 
@@ -71,6 +73,46 @@ def _sample_cross_series_df() -> pd.DataFrame:
                 pd.Timestamp("2024-04-05", tz="UTC"),
             ],
             "value": [3.0, 3.5, 4.0, 1.0, 1.1, 1.2],
+        }
+    )
+
+
+def _sample_ffill_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "series_key": ["GDP", "GDP", "GDP"],
+            "obs_date": [
+                pd.Timestamp("2024-01-31"),
+                pd.Timestamp("2024-02-29"),
+                pd.Timestamp("2024-03-31"),
+            ],
+            "asof_utc": [pd.Timestamp("2024-04-10", tz="UTC")] * 3,
+            "value": [1.0, None, 3.0],
+            "source": ["test"] * 3,
+        }
+    )
+
+
+def _sample_coalesce_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "series_key": ["GDP", "GDP", "ALT", "ALT", "ALT"],
+            "obs_date": [
+                pd.Timestamp("2024-01-31"),
+                pd.Timestamp("2024-03-31"),
+                pd.Timestamp("2024-01-31"),
+                pd.Timestamp("2024-02-29"),
+                pd.Timestamp("2024-03-31"),
+            ],
+            "asof_utc": [
+                pd.Timestamp("2024-04-10", tz="UTC"),
+                pd.Timestamp("2024-04-10", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+                pd.Timestamp("2024-04-05", tz="UTC"),
+            ],
+            "value": [3.0, 4.0, 1.0, 2.0, 3.0],
+            "source": ["test"] * 5,
         }
     )
 
@@ -453,8 +495,13 @@ def test_cross_series_binary_engine_contract(tmp_path):
     [
         ("lag", {"periods": 1}),
         ("diff", {"periods": 1}),
+        ("pct_change", {"periods": 1}),
         ("rolling", {"window": 2, "min_periods": 1, "agg": "mean"}),
+        ("rolling", {"window": 2, "min_periods": 1, "agg": "count"}),
+        ("rolling", {"window": 2, "min_periods": 2, "agg": "std"}),
         ("expanding", {"min_periods": 1, "agg": "mean"}),
+        ("expanding", {"min_periods": 1, "agg": "count"}),
+        ("expanding", {"min_periods": 2, "agg": "var"}),
     ],
 )
 def test_python_duckdb_parity_for_supported_path_ops(tmp_path, op, params):
@@ -560,7 +607,151 @@ def test_preview_transform_matches_apply_rows(tmp_path):
     pd.testing.assert_frame_equal(preview_sorted, got, check_dtype=False)
 
 
-def test_python_duckdb_parity_for_resample(tmp_path):
+def test_ffill_preview_and_engine_resolution(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_df())
+
+    spec = PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="GDP_ffill",
+        op="ffill",
+        params={"limit": 1},
+        engine="auto",
+    )
+    result = pit.apply_transform(spec, persist=False)
+    explained = pit.explain_transform(spec)
+
+    assert result.engine_used == "python"
+    assert explained["engine_used"] == "python"
+    assert result.rows_written > 0
+
+    snapshot = pd.Series(
+        [1.0, None, 3.0],
+        index=pd.DatetimeIndex(
+            [
+                pd.Timestamp("2024-01-31", tz="UTC"),
+                pd.Timestamp("2024-02-29", tz="UTC"),
+                pd.Timestamp("2024-03-31", tz="UTC"),
+            ]
+        ),
+    )
+    got = apply_obs_path_transform(snapshot, spec, engine="python")
+    expected = pd.Series(
+        [1.0, 1.0, 3.0],
+        index=pd.DatetimeIndex(
+            [
+                pd.Timestamp("2024-01-31", tz="UTC"),
+                pd.Timestamp("2024-02-29", tz="UTC"),
+                pd.Timestamp("2024-03-31", tz="UTC"),
+            ]
+        ),
+    )
+    pd.testing.assert_series_equal(
+        got,
+        expected,
+        check_names=False,
+        check_index_type=False,
+    )
+
+
+def test_coalesce_transform_splices_by_precedence_and_records_lineage(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_coalesce_df())
+
+    spec = PITTransformSpec(
+        input_series_key="GDP",
+        output_series_key="GDP_spliced",
+        op="coalesce",
+        params={"other_series_keys": ["ALT"]},
+    )
+    explained = pit.explain_transform(spec)
+    result = pit.apply_transform(spec, overwrite=True)
+
+    assert explained["input_series_keys"] == ["GDP", "ALT"]
+    assert explained["candidate_asof_count"] == 2
+    assert explained["engine_used"] == "python"
+    assert result.engine_used == "python"
+    assert result.rows_written == 6
+
+    out = pit.conn.execute(
+        """
+        SELECT obs_date, asof_utc, value, meta_json
+        FROM pit_observations
+        WHERE series_key = ?
+        ORDER BY asof_utc, obs_date
+        """,
+        ["GDP_spliced"],
+    ).fetchdf()
+    assert not out.empty
+
+    asof_0405 = out[pd.to_datetime(out["asof_utc"], utc=True) == pd.Timestamp("2024-04-05", tz="UTC")]
+    asof_0410 = out[pd.to_datetime(out["asof_utc"], utc=True) == pd.Timestamp("2024-04-10", tz="UTC")]
+
+    got_0405 = pd.Series(
+        asof_0405["value"].to_numpy(),
+        index=pd.to_datetime(asof_0405["obs_date"], utc=True),
+    ).sort_index()
+    got_0410 = pd.Series(
+        asof_0410["value"].to_numpy(),
+        index=pd.to_datetime(asof_0410["obs_date"], utc=True),
+    ).sort_index()
+    expected_0405 = pd.Series(
+        [1.0, 2.0, 3.0],
+        index=pd.DatetimeIndex(
+            [
+                pd.Timestamp("2024-01-31", tz="UTC"),
+                pd.Timestamp("2024-02-29", tz="UTC"),
+                pd.Timestamp("2024-03-31", tz="UTC"),
+            ]
+        ),
+    )
+    expected_0410 = pd.Series(
+        [3.0, 2.0, 4.0],
+        index=pd.DatetimeIndex(
+            [
+                pd.Timestamp("2024-01-31", tz="UTC"),
+                pd.Timestamp("2024-02-29", tz="UTC"),
+                pd.Timestamp("2024-03-31", tz="UTC"),
+            ]
+        ),
+    )
+    pd.testing.assert_series_equal(
+        got_0405,
+        expected_0405,
+        check_names=False,
+        check_index_type=False,
+    )
+    pd.testing.assert_series_equal(
+        got_0410,
+        expected_0410,
+        check_names=False,
+        check_index_type=False,
+    )
+
+    meta_0410 = {
+        pd.Timestamp(row.obs_date, tz="UTC"): json.loads(row.meta_json)
+        for row in asof_0410.itertuples(index=False)
+    }
+    assert meta_0410[pd.Timestamp("2024-01-31", tz="UTC")]["selected_input_series_key"] == "GDP"
+    assert meta_0410[pd.Timestamp("2024-01-31", tz="UTC")]["selected_input_asof_utc"] == "2024-04-10T00:00:00+00:00"
+    assert meta_0410[pd.Timestamp("2024-02-29", tz="UTC")]["selected_input_series_key"] == "ALT"
+    assert meta_0410[pd.Timestamp("2024-02-29", tz="UTC")]["selected_input_asof_utc"] == "2024-04-05T00:00:00+00:00"
+
+    listed = pit.list_transforms("GDP_spliced")
+    assert not listed.empty
+    assert '"ALT"' in str(listed.iloc[0]["input_series_keys_json"])
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"rule": "Q", "agg": "last"},
+        {"rule": "Q", "agg": "count"},
+        {"rule": "Q", "agg": "std"},
+        {"rule": "Q", "agg": "var"},
+    ],
+)
+def test_python_duckdb_parity_for_resample(tmp_path, params):
     pit = _make_accessor(tmp_path)
     pit.upsert_pit_observations(_sample_df())
 
@@ -568,14 +759,14 @@ def test_python_duckdb_parity_for_resample(tmp_path):
         input_series_key="GDP",
         output_series_key="GDP_resample_py",
         op="resample",
-        params={"rule": "Q", "agg": "last"},
+        params=params,
         engine="python",
     )
     ddb_spec = PITTransformSpec(
         input_series_key="GDP",
         output_series_key="GDP_resample_ddb",
         op="resample",
-        params={"rule": "Q", "agg": "last"},
+        params=params,
         engine="duckdb",
     )
 
@@ -592,7 +783,10 @@ def test_python_duckdb_parity_for_resample(tmp_path):
     "params",
     [
         {"agg": "last"},
+        {"agg": "count"},
+        {"agg": "std"},
         {"rule": "Q", "agg": "sum"},
+        {"rule": "Q", "agg": "var"},
     ],
 )
 def test_python_duckdb_parity_for_aggregate(tmp_path, params):

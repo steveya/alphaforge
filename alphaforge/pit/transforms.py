@@ -23,15 +23,21 @@ TransformOp = Literal[
     "expanding",
     "lag",
     "diff",
+    "pct_change",
+    "ffill",
     "binary",
+    "coalesce",
+    "splice",
     "path_apply",
 ]
 TransformEngine = Literal["auto", "duckdb", "python"]
 EngineMismatchPolicy = Literal["error", "fallback"]
 RuntimeEngine = Literal["duckdb", "python"]
-AggName = Literal["first", "last", "min", "max", "mean", "sum"]
+AggName = Literal["first", "last", "min", "max", "mean", "sum", "count", "std", "var"]
 BinaryOperator = Literal["add", "sub", "mul", "div"]
 JoinMode = Literal["inner", "left", "right", "outer"]
+SpliceAdjustment = Literal["ratio", "add"]
+TransformInputKind = Literal["single", "multi"]
 
 
 class ResampleParams(TypedDict, total=False):
@@ -63,11 +69,30 @@ class DiffParams(TypedDict, total=False):
     periods: int
 
 
+class PctChangeParams(TypedDict, total=False):
+    periods: int
+
+
+class FFillParams(TypedDict, total=False):
+    limit: int
+
+
 class BinaryParams(TypedDict, total=False):
     right_series_key: str
     operator: BinaryOperator
     join: JoinMode
     fill_value: float
+
+
+class CoalesceParams(TypedDict, total=False):
+    other_series_keys: list[str] | tuple[str, ...] | str
+
+
+class SpliceParams(TypedDict, total=False):
+    right_series_key: str
+    adjustment: SpliceAdjustment
+    transition_periods: int
+    join: JoinMode
 
 
 class PathApplyParams(TypedDict, total=False):
@@ -82,41 +107,26 @@ TransformParams = (
     | ExpandingParams
     | LagParams
     | DiffParams
+    | PctChangeParams
+    | FFillParams
     | BinaryParams
+    | CoalesceParams
+    | SpliceParams
     | PathApplyParams
     | dict[str, Any]
 )
 
-_ALLOWED_AXIS_OPS: dict[TransformAxis, tuple[TransformOp, ...]] = {
-    "obs_path": (
-        "resample",
-        "aggregate",
-        "rolling",
-        "expanding",
-        "lag",
-        "diff",
-        "binary",
-        "path_apply",
-    ),
-    "revision_path": (
-        "rolling",
-        "expanding",
-        "lag",
-        "diff",
-    ),
-}
 
-_ALLOWED_AGGS: set[str] = {"first", "last", "min", "max", "mean", "sum"}
-_ALLOWED_PARAM_KEYS: dict[TransformOp, set[str]] = {
-    "resample": {"rule", "agg"},
-    "aggregate": {"rule", "agg"},
-    "rolling": {"window", "min_periods", "agg"},
-    "expanding": {"min_periods", "agg"},
-    "lag": {"periods"},
-    "diff": {"periods"},
-    "binary": {"right_series_key", "operator", "join", "fill_value"},
-    "path_apply": {"udf_name", "func"},
-}
+@dataclass
+class TransformOperatorDef:
+    allowed_axes: tuple[TransformAxis, ...]
+    param_keys: set[str]
+    normalize: Callable[[Mapping[str, Any], bool], dict[str, Any]]
+    input_series_keys: Callable[[PITTransformSpec], list[str]]
+    input_kind: TransformInputKind = "single"
+    duckdb_supports: Callable[[dict[str, Any]], bool] | None = None
+    python_runner: Callable[[pd.Series, PITTransformSpec, dict[str, Any]], pd.Series] | None = None
+    duckdb_runner: Callable[[pd.Series, PITTransformSpec, dict[str, Any]], pd.Series] | None = None
 
 
 @dataclass(frozen=True)
@@ -177,11 +187,59 @@ class PITTransformResult:
     fallback_reason: str | None = None
 
 
+def _get_operator_def(op: TransformOp) -> TransformOperatorDef:
+    try:
+        return _OPERATORS[op]
+    except KeyError as exc:
+        raise PITUnsupportedOperationError(f"Unsupported PIT transform op: {op}") from exc
+
+
+def _default_input_series_keys(spec: PITTransformSpec) -> list[str]:
+    return [spec.input_series_key]
+
+
+def _binary_input_series_keys(spec: PITTransformSpec) -> list[str]:
+    keys = [spec.input_series_key]
+    right_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
+    if right_key:
+        keys.append(right_key)
+    return keys
+
+
+def _coalesce_input_series_keys(spec: PITTransformSpec) -> list[str]:
+    keys: list[str] = []
+    seen: set[str] = set()
+    for key in [spec.input_series_key, *spec.sanitized_params().get("other_series_keys", [])]:
+        text = str(key).strip()
+        if not text or text in seen:
+            continue
+        keys.append(text)
+        seen.add(text)
+    return keys
+
+
+def _splice_input_series_keys(spec: PITTransformSpec) -> list[str]:
+    keys = [spec.input_series_key]
+    right_key = str(spec.sanitized_params().get("right_series_key", "")).strip()
+    if right_key:
+        keys.append(right_key)
+    return keys
+
+
+def transform_input_series_keys(spec: PITTransformSpec) -> list[str]:
+    return _get_operator_def(spec.op).input_series_keys(spec)
+
+
+def transform_input_kind(spec: PITTransformSpec) -> TransformInputKind:
+    return _get_operator_def(spec.op).input_kind
+
+
 def _supported_combinations_text() -> str:
-    items: list[str] = []
-    for axis, ops_tuple in _ALLOWED_AXIS_OPS.items():
-        ops = ", ".join(ops_tuple)
-        items.append(f"{axis}: {ops}")
+    ops_by_axis: dict[TransformAxis, list[str]] = {"obs_path": [], "revision_path": []}
+    for op_name, op_def in _OPERATORS.items():
+        for axis in op_def.allowed_axes:
+            ops_by_axis[axis].append(op_name)
+    items = [f"{axis}: {', '.join(ops)}" for axis, ops in ops_by_axis.items()]
     return "; ".join(items)
 
 
@@ -227,6 +285,187 @@ def _validate_agg(agg: str) -> str:
     return out
 
 
+def _validate_positive_int(*, value: Any, name: str) -> int:
+    out = int(value)
+    if out <= 0:
+        raise PITValidationError(f"{name} must be > 0.")
+    return out
+
+
+def _validate_non_negative_int(*, value: Any, name: str) -> int:
+    out = int(value)
+    if out < 0:
+        raise PITValidationError(f"{name} must be >= 0.")
+    return out
+
+
+def _normalize_resample_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    rule = str(params.get("rule", "")).strip()
+    if not rule:
+        raise PITValidationError("resample requires params['rule'].")
+    return {
+        "rule": _normalize_resample_rule(rule),
+        "agg": _validate_agg(str(params.get("agg", "last"))),
+    }
+
+
+def _normalize_aggregate_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    out: dict[str, Any] = {"agg": _validate_agg(str(params.get("agg", "last")))}
+    if "rule" in params and params["rule"] is not None:
+        rule = str(params["rule"]).strip()
+        if not rule:
+            raise PITValidationError("aggregate params['rule'] must be non-empty when set.")
+        out["rule"] = _normalize_resample_rule(rule)
+    return out
+
+
+def _normalize_rolling_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    window = _validate_positive_int(value=params.get("window", 1), name="rolling params['window']")
+    min_periods = _validate_positive_int(
+        value=params.get("min_periods", window),
+        name="rolling params['min_periods']",
+    )
+    return {
+        "window": window,
+        "min_periods": min_periods,
+        "agg": _validate_agg(str(params.get("agg", "mean"))),
+    }
+
+
+def _normalize_expanding_params(
+    params: Mapping[str, Any],
+    include_callable: bool,
+) -> dict[str, Any]:
+    del include_callable
+    min_periods = _validate_positive_int(
+        value=params.get("min_periods", 1),
+        name="expanding params['min_periods']",
+    )
+    return {
+        "min_periods": min_periods,
+        "agg": _validate_agg(str(params.get("agg", "mean"))),
+    }
+
+
+def _normalize_periods_params(
+    op: TransformOp,
+    params: Mapping[str, Any],
+    include_callable: bool,
+) -> dict[str, Any]:
+    del include_callable
+    periods = _validate_positive_int(value=params.get("periods", 1), name=f"{op} params['periods']")
+    return {"periods": periods}
+
+
+def _normalize_ffill_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    out: dict[str, Any] = {}
+    if "limit" in params and params["limit"] is not None:
+        out["limit"] = _validate_positive_int(value=params["limit"], name="ffill params['limit']")
+    return out
+
+
+def _normalize_binary_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    right_series_key = str(params.get("right_series_key", "")).strip()
+    if not right_series_key:
+        raise PITValidationError("binary requires params['right_series_key'].")
+
+    operator = str(params.get("operator", "sub")).strip().lower()
+    if operator not in {"add", "sub", "mul", "div"}:
+        raise PITValidationError(
+            "binary requires params['operator'] in ['add', 'sub', 'mul', 'div']."
+        )
+
+    join = str(params.get("join", "inner")).strip().lower()
+    if join not in {"inner", "left", "right", "outer"}:
+        raise PITValidationError(
+            "binary requires params['join'] in ['inner', 'left', 'right', 'outer']."
+        )
+
+    out: dict[str, Any] = {
+        "right_series_key": right_series_key,
+        "operator": operator,
+        "join": join,
+    }
+    if "fill_value" in params and params["fill_value"] is not None:
+        out["fill_value"] = float(params["fill_value"])
+    return out
+
+
+def _normalize_coalesce_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    raw_values = params.get("other_series_keys")
+    if isinstance(raw_values, str):
+        items = [raw_values]
+    elif isinstance(raw_values, (list, tuple)):
+        items = list(raw_values)
+    else:
+        raise PITValidationError("coalesce requires params['other_series_keys'] list/tuple.")
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in items:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+    if not cleaned:
+        raise PITValidationError("coalesce requires at least one non-empty other_series_key.")
+    return {"other_series_keys": cleaned}
+
+
+def _normalize_splice_params(params: Mapping[str, Any], include_callable: bool) -> dict[str, Any]:
+    del include_callable
+    right_series_key = str(params.get("right_series_key", "")).strip()
+    if not right_series_key:
+        raise PITValidationError("splice requires params['right_series_key'].")
+
+    adjustment = str(params.get("adjustment", "")).strip().lower()
+    if adjustment not in {"ratio", "add"}:
+        raise PITValidationError("splice requires params['adjustment'] in ['ratio', 'add'].")
+
+    join = str(params.get("join", "outer")).strip().lower()
+    if join not in {"inner", "left", "right", "outer"}:
+        raise PITValidationError(
+            "splice requires params['join'] in ['inner', 'left', 'right', 'outer']."
+        )
+
+    transition_periods = _validate_non_negative_int(
+        value=params.get("transition_periods", 0),
+        name="splice params['transition_periods']",
+    )
+
+    return {
+        "right_series_key": right_series_key,
+        "adjustment": adjustment,
+        "transition_periods": transition_periods,
+        "join": join,
+    }
+
+
+def _normalize_path_apply_params(
+    params: Mapping[str, Any],
+    include_callable: bool,
+) -> dict[str, Any]:
+    udf_name = str(params.get("udf_name", "")).strip()
+    if not udf_name:
+        raise PITValidationError("path_apply requires params['udf_name'] for lineage.")
+
+    func = params.get("func")
+    if not callable(func):
+        raise PITValidationError("path_apply requires params['func'] callable.")
+
+    out: dict[str, Any] = {"udf_name": udf_name}
+    if include_callable:
+        out["func"] = func
+    return out
+
+
 def normalize_transform_params(
     op: TransformOp,
     params: Mapping[str, Any],
@@ -236,93 +475,14 @@ def normalize_transform_params(
     if not isinstance(params, Mapping):
         raise PITValidationError("Transform params must be a mapping.")
 
-    unknown_keys = sorted(set(params.keys()) - _ALLOWED_PARAM_KEYS[op])
+    operator = _get_operator_def(op)
+    unknown_keys = sorted(set(params.keys()) - operator.param_keys)
     if unknown_keys:
         raise PITValidationError(
             f"Unknown params for op='{op}': {unknown_keys}. "
-            f"Allowed keys: {sorted(_ALLOWED_PARAM_KEYS[op])}"
+            f"Allowed keys: {sorted(operator.param_keys)}"
         )
-
-    out: dict[str, Any] = {}
-
-    if op == "resample":
-        rule = str(params.get("rule", "")).strip()
-        if not rule:
-            raise PITValidationError("resample requires params['rule'].")
-        out["rule"] = _normalize_resample_rule(rule)
-        out["agg"] = _validate_agg(str(params.get("agg", "last")))
-
-    elif op == "aggregate":
-        if "rule" in params and params["rule"] is not None:
-            rule = str(params["rule"]).strip()
-            if not rule:
-                raise PITValidationError("aggregate params['rule'] must be non-empty when set.")
-            out["rule"] = _normalize_resample_rule(rule)
-        out["agg"] = _validate_agg(str(params.get("agg", "last")))
-
-    elif op == "rolling":
-        window = int(params.get("window", 1))
-        min_periods = int(params.get("min_periods", window))
-        if window <= 0:
-            raise PITValidationError("rolling requires params['window'] > 0.")
-        if min_periods <= 0:
-            raise PITValidationError("rolling requires params['min_periods'] > 0.")
-        out["window"] = window
-        out["min_periods"] = min_periods
-        out["agg"] = _validate_agg(str(params.get("agg", "mean")))
-
-    elif op == "expanding":
-        min_periods = int(params.get("min_periods", 1))
-        if min_periods <= 0:
-            raise PITValidationError("expanding requires params['min_periods'] > 0.")
-        out["min_periods"] = min_periods
-        out["agg"] = _validate_agg(str(params.get("agg", "mean")))
-
-    elif op in {"lag", "diff"}:
-        periods = int(params.get("periods", 1))
-        if periods <= 0:
-            raise PITValidationError(f"{op} requires params['periods'] > 0.")
-        out["periods"] = periods
-
-    elif op == "binary":
-        right_series_key = str(params.get("right_series_key", "")).strip()
-        if not right_series_key:
-            raise PITValidationError("binary requires params['right_series_key'].")
-        out["right_series_key"] = right_series_key
-
-        operator = str(params.get("operator", "sub")).strip().lower()
-        if operator not in {"add", "sub", "mul", "div"}:
-            raise PITValidationError(
-                "binary requires params['operator'] in ['add', 'sub', 'mul', 'div']."
-            )
-        out["operator"] = operator
-
-        join = str(params.get("join", "inner")).strip().lower()
-        if join not in {"inner", "left", "right", "outer"}:
-            raise PITValidationError(
-                "binary requires params['join'] in ['inner', 'left', 'right', 'outer']."
-            )
-        out["join"] = join
-
-        if "fill_value" in params and params["fill_value"] is not None:
-            out["fill_value"] = float(params["fill_value"])
-
-    elif op == "path_apply":
-        udf_name = str(params.get("udf_name", "")).strip()
-        if not udf_name:
-            raise PITValidationError("path_apply requires params['udf_name'] for lineage.")
-        out["udf_name"] = udf_name
-
-        func = params.get("func")
-        if not callable(func):
-            raise PITValidationError("path_apply requires params['func'] callable.")
-        if include_callable:
-            out["func"] = func
-
-    else:
-        raise PITUnsupportedOperationError(f"Unsupported PIT transform op: {op}")
-
-    return out
+    return operator.normalize(params, include_callable)
 
 
 def validate_transform_spec(spec: PITTransformSpec) -> None:
@@ -331,14 +491,8 @@ def validate_transform_spec(spec: PITTransformSpec) -> None:
     if not spec.output_series_key:
         raise PITContractError("output_series_key is required.")
 
-    if spec.axis not in _ALLOWED_AXIS_OPS:
-        allowed_axes = ", ".join(sorted(_ALLOWED_AXIS_OPS))
-        raise PITUnsupportedOperationError(
-            f"Unsupported transform axis: '{spec.axis}'. Allowed: {allowed_axes}"
-        )
-
-    allowed = _ALLOWED_AXIS_OPS[spec.axis]
-    if spec.op not in allowed:
+    operator = _get_operator_def(spec.op)
+    if spec.axis not in operator.allowed_axes:
         combos = _supported_combinations_text()
         raise PITUnsupportedOperationError(
             "Unsupported op/axis combination: "
@@ -354,22 +508,10 @@ def _is_duckdb_rule_supported(rule: str) -> bool:
 
 
 def duckdb_supports_spec(spec: PITTransformSpec) -> bool:
-    if spec.op in {"path_apply", "binary"}:
+    operator = _get_operator_def(spec.op)
+    if operator.duckdb_supports is None:
         return False
-
-    params = spec.normalized_params(include_callable=False)
-
-    if spec.op == "resample":
-        rule = str(params.get("rule", ""))
-        return _is_duckdb_rule_supported(rule)
-
-    if spec.op == "aggregate":
-        rule_value = params.get("rule")
-        if rule_value is None:
-            return True
-        return _is_duckdb_rule_supported(str(rule_value))
-
-    return spec.op in {"rolling", "expanding", "lag", "diff"}
+    return operator.duckdb_supports(spec.normalized_params(include_callable=False))
 
 
 def resolve_engine(
@@ -460,6 +602,12 @@ def _window_agg_expr(agg: str) -> str:
         return "MIN(value)"
     if agg == "max":
         return "MAX(value)"
+    if agg == "count":
+        return "COUNT(value)"
+    if agg == "std":
+        return "STDDEV_SAMP(value)"
+    if agg == "var":
+        return "VAR_SAMP(value)"
     if agg == "first":
         return "FIRST_VALUE(value)"
     if agg == "last":
@@ -476,6 +624,12 @@ def _grouped_agg_expr(agg: str) -> str:
         return "MIN(value)"
     if agg == "max":
         return "MAX(value)"
+    if agg == "count":
+        return "COUNT(value)"
+    if agg == "std":
+        return "STDDEV_SAMP(value)"
+    if agg == "var":
+        return "VAR_SAMP(value)"
     if agg == "first":
         return "list_extract(list(value ORDER BY ts) FILTER (WHERE value IS NOT NULL), 1)"
     if agg == "last":
@@ -525,167 +679,259 @@ def _run_duckdb_series_query(df: pd.DataFrame, query: str) -> pd.Series:
     return series
 
 
-def _apply_series_op_python(s: pd.Series, spec: PITTransformSpec) -> pd.Series:
-    op = spec.op
-    params = spec.normalized_params(include_callable=True)
-
-    if op == "resample":
-        transformed = _apply_named_agg(s.resample(params["rule"]), params["agg"])
-
-    elif op == "aggregate":
-        aggregate_rule = params.get("rule")
-        agg = str(params["agg"])
-        if aggregate_rule is not None:
-            transformed = _apply_named_agg(s.resample(str(aggregate_rule)), agg)
-        else:
-            if s.empty:
-                transformed = pd.Series(dtype="float64")
-            else:
-                transformed = pd.Series(
-                    [_aggregate_scalar(s, agg)],
-                    index=pd.DatetimeIndex([s.index.max()]),
-                )
-
-    elif op == "rolling":
-        transformed = _apply_named_agg(
-            s.rolling(
-                window=int(params["window"]),
-                min_periods=int(params["min_periods"]),
-            ),
-            str(params["agg"]),
-        )
-
-    elif op == "expanding":
-        transformed = _apply_named_agg(
-            s.expanding(min_periods=int(params["min_periods"])),
-            str(params["agg"]),
-        )
-
-    elif op == "lag":
-        transformed = s.shift(periods=int(params["periods"]))
-
-    elif op == "diff":
-        transformed = s.diff(periods=int(params["periods"]))
-
-    elif op == "path_apply":
-        func = cast(Callable[[pd.Series], Any], params["func"])
-        applied = func(s.copy())
-        if isinstance(applied, pd.Series):
-            transformed = applied
-        else:
-            transformed = pd.Series(applied, index=s.index)
-    elif op == "binary":
-        raise PITUnsupportedOperationError(
-            "binary transform requires a left and right snapshot and must be applied "
-            "through PITAccessor.apply_transform."
-        )
-
-    else:
-        raise PITUnsupportedOperationError(f"Unsupported PIT transform op: {op}")
-
-    out = pd.Series(transformed).sort_index()
-    out.index = _coerce_utc_index(out.index)
-    out = _as_numeric(out)
-    out.name = spec.output_series_key
-    return out
+def _run_resample_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    return _apply_named_agg(s.resample(params["rule"]), params["agg"])
 
 
-def _apply_series_op_duckdb(s: pd.Series, spec: PITTransformSpec) -> pd.Series:
-    op = spec.op
-    params = spec.normalized_params(include_callable=True)
+def _run_aggregate_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    aggregate_rule = params.get("rule")
+    agg = str(params["agg"])
+    if aggregate_rule is not None:
+        return _apply_named_agg(s.resample(str(aggregate_rule)), agg)
     if s.empty:
-        return pd.Series(dtype="float64", name=spec.output_series_key)
+        return pd.Series(dtype="float64")
+    return pd.Series([_aggregate_scalar(s, agg)], index=pd.DatetimeIndex([s.index.max()]))
 
+
+def _run_rolling_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    return _apply_named_agg(
+        s.rolling(
+            window=int(params["window"]),
+            min_periods=int(params["min_periods"]),
+        ),
+        str(params["agg"]),
+    )
+
+
+def _run_expanding_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    return _apply_named_agg(
+        s.expanding(min_periods=int(params["min_periods"])),
+        str(params["agg"]),
+    )
+
+
+def _run_lag_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    return s.shift(periods=int(params["periods"]))
+
+
+def _run_diff_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    return s.diff(periods=int(params["periods"]))
+
+
+def _run_pct_change_python(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    return s.pct_change(periods=int(params["periods"]), fill_method=None)
+
+
+def _run_ffill_python(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    limit = params.get("limit")
+    return s.ffill(limit=int(limit) if limit is not None else None)
+
+
+def _run_path_apply_python(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    func = cast(Callable[[pd.Series], Any], params["func"])
+    applied = func(s.copy())
+    if isinstance(applied, pd.Series):
+        return applied
+    return pd.Series(applied, index=s.index)
+
+
+def _run_lag_duckdb(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
     df = _to_duckdb_frame(s)
+    periods = int(params["periods"])
+    query = f"""
+        SELECT ts, LAG(value, {periods}) OVER (ORDER BY ts) AS value
+        FROM series_input
+        ORDER BY ts
+    """
+    return _run_duckdb_series_query(df, query)
 
-    if op == "lag":
-        periods = int(params["periods"])
-        query = f"""
-            SELECT ts, LAG(value, {periods}) OVER (ORDER BY ts) AS value
-            FROM series_input
-            ORDER BY ts
-        """
-    elif op == "diff":
-        periods = int(params["periods"])
-        query = f"""
-            SELECT ts, value - LAG(value, {periods}) OVER (ORDER BY ts) AS value
-            FROM series_input
-            ORDER BY ts
-        """
-    elif op == "rolling":
-        window = int(params["window"])
-        min_periods = int(params["min_periods"])
-        agg_expr = _window_agg_expr(str(params["agg"]))
-        query = f"""
+
+def _run_diff_duckdb(s: pd.Series, spec: PITTransformSpec, params: dict[str, Any]) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    periods = int(params["periods"])
+    query = f"""
+        SELECT ts, value - LAG(value, {periods}) OVER (ORDER BY ts) AS value
+        FROM series_input
+        ORDER BY ts
+    """
+    return _run_duckdb_series_query(df, query)
+
+
+def _run_pct_change_duckdb(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    periods = int(params["periods"])
+    query = f"""
+        WITH lagged AS (
             SELECT
                 ts,
-                CASE
-                    WHEN COUNT(value) OVER w >= {min_periods}
-                    THEN {agg_expr} OVER w
-                    ELSE NULL
-                END AS value
+                value,
+                LAG(value, {periods}) OVER (ORDER BY ts) AS prev_value
             FROM series_input
-            WINDOW w AS (
-                ORDER BY ts
-                ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW
-            )
+        )
+        SELECT
+            ts,
+            CASE
+                WHEN prev_value IS NULL THEN NULL
+                ELSE (value / prev_value) - 1
+            END AS value
+        FROM lagged
+        ORDER BY ts
+    """
+    return _run_duckdb_series_query(df, query)
+
+
+def _run_rolling_duckdb(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    window = int(params["window"])
+    min_periods = int(params["min_periods"])
+    agg_expr = _window_agg_expr(str(params["agg"]))
+    query = f"""
+        SELECT
+            ts,
+            CASE
+                WHEN COUNT(value) OVER w >= {min_periods}
+                THEN {agg_expr} OVER w
+                ELSE NULL
+            END AS value
+        FROM series_input
+        WINDOW w AS (
             ORDER BY ts
-        """
-    elif op == "expanding":
-        min_periods = int(params["min_periods"])
-        agg_expr = _window_agg_expr(str(params["agg"]))
+            ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW
+        )
+        ORDER BY ts
+    """
+    return _run_duckdb_series_query(df, query)
+
+
+def _run_expanding_duckdb(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    min_periods = int(params["min_periods"])
+    agg_expr = _window_agg_expr(str(params["agg"]))
+    query = f"""
+        SELECT
+            ts,
+            CASE
+                WHEN COUNT(value) OVER w >= {min_periods}
+                THEN {agg_expr} OVER w
+                ELSE NULL
+            END AS value
+        FROM series_input
+        WINDOW w AS (
+            ORDER BY ts
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        )
+        ORDER BY ts
+    """
+    return _run_duckdb_series_query(df, query)
+
+
+def _run_resample_duckdb(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    rule = str(params["rule"])
+    bucket_expr = _bucket_end_expr(rule)
+    agg_expr = _grouped_agg_expr(str(params["agg"]))
+    query = f"""
+        SELECT {bucket_expr} AS ts, {agg_expr} AS value
+        FROM series_input
+        GROUP BY 1
+        ORDER BY 1
+    """
+    return _run_duckdb_series_query(df, query)
+
+
+def _run_aggregate_duckdb(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    params: dict[str, Any],
+) -> pd.Series:
+    del spec
+    df = _to_duckdb_frame(s)
+    agg_expr = _grouped_agg_expr(str(params["agg"]))
+    rule_value = params.get("rule")
+    if rule_value is None:
         query = f"""
-            SELECT
-                ts,
-                CASE
-                    WHEN COUNT(value) OVER w >= {min_periods}
-                    THEN {agg_expr} OVER w
-                    ELSE NULL
-                END AS value
+            SELECT MAX(ts) AS ts, {agg_expr} AS value
             FROM series_input
-            WINDOW w AS (
-                ORDER BY ts
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            )
-            ORDER BY ts
         """
-    elif op == "resample":
-        rule = str(params["rule"])
-        bucket_expr = _bucket_end_expr(rule)
-        agg_expr = _grouped_agg_expr(str(params["agg"]))
+    else:
+        bucket_expr = _bucket_end_expr(str(rule_value))
         query = f"""
             SELECT {bucket_expr} AS ts, {agg_expr} AS value
             FROM series_input
             GROUP BY 1
             ORDER BY 1
         """
-    elif op == "aggregate":
-        agg_expr = _grouped_agg_expr(str(params["agg"]))
-        rule_value = params.get("rule")
-        if rule_value is None:
-            query = f"""
-                SELECT MAX(ts) AS ts, {agg_expr} AS value
-                FROM series_input
-            """
-        else:
-            bucket_expr = _bucket_end_expr(str(rule_value))
-            query = f"""
-                SELECT {bucket_expr} AS ts, {agg_expr} AS value
-                FROM series_input
-                GROUP BY 1
-                ORDER BY 1
-            """
-    elif op == "binary":
+    return _run_duckdb_series_query(df, query)
+
+
+def _apply_series_runner(
+    s: pd.Series,
+    spec: PITTransformSpec,
+    *,
+    engine: RuntimeEngine,
+) -> pd.Series:
+    operator = _get_operator_def(spec.op)
+    if operator.input_kind != "single":
         raise PITUnsupportedOperationError(
-            "DuckDB series op for 'binary' is not supported in the single-series runner."
-        )
-    else:
-        raise PITUnsupportedOperationError(
-            f"DuckDB engine does not support PIT op='{op}' for axis='{spec.axis}'."
+            f"{spec.op} transform requires multiple input snapshots and must be applied "
+            "through PITAccessor.apply_transform."
         )
 
-    out = _run_duckdb_series_query(df, query)
+    params = spec.normalized_params(include_callable=(engine == "python"))
+    if engine == "duckdb":
+        runner = operator.duckdb_runner
+        if runner is None:
+            raise PITUnsupportedOperationError(
+                f"DuckDB engine does not support PIT op='{spec.op}' for axis='{spec.axis}'."
+            )
+    else:
+        runner = operator.python_runner
+        if runner is None:
+            raise PITUnsupportedOperationError(f"Unsupported PIT transform op: {spec.op}")
+
+    transformed = runner(s, spec, params)
+    out = pd.Series(transformed).sort_index()
     out.index = _coerce_utc_index(out.index)
+    out = _as_numeric(out)
     out.name = spec.output_series_key
     return out
 
@@ -704,9 +950,7 @@ def apply_obs_path_transform(
     s = snapshot.copy().sort_index()
     s = _as_numeric(s)
     s.index = _coerce_utc_index(s.index)
-    if engine == "duckdb":
-        return _apply_series_op_duckdb(s, spec)
-    return _apply_series_op_python(s, spec)
+    return _apply_series_runner(s, spec, engine=engine)
 
 
 def apply_binary_obs_path_transform(
@@ -757,6 +1001,247 @@ def apply_binary_obs_path_transform(
     return out
 
 
+def _aligned_multi_input_series(
+    left_snapshot: pd.Series,
+    right_snapshot: pd.Series,
+    *,
+    join_mode: JoinMode,
+) -> tuple[pd.Series, pd.Series]:
+    left = _as_numeric(left_snapshot.copy().sort_index())
+    right = _as_numeric(right_snapshot.copy().sort_index())
+    left.index = _coerce_utc_index(left.index)
+    right.index = _coerce_utc_index(right.index)
+    return left.align(right, join=join_mode)
+
+
+def apply_splice_obs_path_transform(
+    left_snapshot: pd.Series,
+    right_snapshot: pd.Series,
+    spec: PITTransformSpec,
+) -> pd.DataFrame:
+    """Apply an adjusted PIT splice over two obs_date-indexed snapshots."""
+    if spec.axis != "obs_path":
+        raise PITContractError("apply_splice_obs_path_transform requires axis='obs_path'.")
+    if spec.op != "splice":
+        raise PITContractError("apply_splice_obs_path_transform requires op='splice'.")
+    validate_transform_spec(spec)
+
+    params = spec.normalized_params(include_callable=False)
+    join_mode = cast(JoinMode, params["join"])
+    adjustment = cast(SpliceAdjustment, params["adjustment"])
+    transition_periods = int(params["transition_periods"])
+    right_series_key = str(params["right_series_key"])
+
+    left_aligned, right_aligned = _aligned_multi_input_series(
+        left_snapshot,
+        right_snapshot,
+        join_mode=join_mode,
+    )
+
+    left_non_null = left_aligned.dropna()
+    right_non_null = right_aligned.dropna()
+    if right_non_null.empty:
+        out = pd.DataFrame(
+            {
+                "value": left_aligned,
+                "selected_input_series_key": pd.Series(
+                    [
+                        spec.input_series_key if pd.notna(value) else pd.NA
+                        for value in left_aligned.to_numpy()
+                    ],
+                    index=left_aligned.index,
+                    dtype="object",
+                ),
+                "splice_state": pd.Series(
+                    ["left" if pd.notna(value) else pd.NA for value in left_aligned.to_numpy()],
+                    index=left_aligned.index,
+                    dtype="object",
+                ),
+                "splice_anchor_obs_date": pd.NaT,
+                "splice_anchor_left_value": pd.NA,
+                "splice_anchor_right_value": pd.NA,
+                "splice_scale": pd.NA,
+                "splice_offset": pd.NA,
+                "splice_left_weight": 1.0,
+                "splice_right_weight": 0.0,
+            }
+        )
+        out = out.dropna(subset=["value"])
+        out.index = _coerce_utc_index(out.index)
+        return out.sort_index()
+
+    handoff_obs_date = pd.Timestamp(right_non_null.index.min())
+    overlap_index = left_non_null.index.intersection(right_non_null.index).sort_values()
+
+    anchor_obs_date: pd.Timestamp | None = None
+    anchor_left_value: float | None = None
+    anchor_right_value: float | None = None
+    splice_scale: float | None = None
+    splice_offset: float | None = None
+    calibrated = False
+
+    if len(overlap_index) > 0:
+        anchor_obs_date = pd.Timestamp(overlap_index.max())
+        anchor_left = left_aligned.loc[anchor_obs_date]
+        anchor_right = right_aligned.loc[anchor_obs_date]
+        if pd.notna(anchor_left) and pd.notna(anchor_right):
+            anchor_left_value = float(anchor_left)
+            anchor_right_value = float(anchor_right)
+            if adjustment == "ratio":
+                if anchor_right_value != 0.0:
+                    splice_scale = anchor_left_value / anchor_right_value
+                    calibrated = True
+            else:
+                splice_offset = anchor_left_value - anchor_right_value
+                calibrated = True
+
+    blended_obs_dates = [
+        pd.Timestamp(obs_date)
+        for obs_date in left_aligned.index
+        if obs_date >= handoff_obs_date
+    ][:transition_periods]
+    transition_positions = {
+        obs_date: pos for pos, obs_date in enumerate(blended_obs_dates)
+    }
+
+    values: list[float | None] = []
+    selected_keys: list[str | None] = []
+    states: list[str | None] = []
+    left_weights: list[float] = []
+    right_weights: list[float] = []
+
+    for obs_date, left_value, right_value in zip(
+        left_aligned.index,
+        left_aligned.to_numpy(),
+        right_aligned.to_numpy(),
+        strict=False,
+    ):
+        obs_ts = pd.Timestamp(obs_date)
+
+        if obs_ts < handoff_obs_date:
+            values.append(float(left_value) if pd.notna(left_value) else None)
+            selected_keys.append(spec.input_series_key if pd.notna(left_value) else None)
+            states.append("left" if pd.notna(left_value) else None)
+            left_weights.append(1.0)
+            right_weights.append(0.0)
+            continue
+
+        if not calibrated:
+            values.append(None)
+            selected_keys.append(None)
+            states.append("uncalibrated")
+            left_weights.append(0.0)
+            right_weights.append(0.0)
+            continue
+
+        adjusted_right_value: float | None
+        if pd.isna(right_value):
+            adjusted_right_value = None
+        elif adjustment == "ratio":
+            adjusted_right_value = float(right_value) * cast(float, splice_scale)
+        else:
+            adjusted_right_value = float(right_value) + cast(float, splice_offset)
+
+        if transition_periods > 0 and obs_ts in transition_positions:
+            pos = transition_positions[obs_ts]
+            right_weight = float((pos + 1) / (transition_periods + 1))
+            left_weight = float(1.0 - right_weight)
+            if pd.notna(left_value) and adjusted_right_value is not None:
+                value = (left_weight * float(left_value)) + (right_weight * adjusted_right_value)
+                values.append(value)
+            else:
+                values.append(None)
+            selected_keys.append(None)
+            states.append("transition")
+            left_weights.append(left_weight)
+            right_weights.append(right_weight)
+            continue
+
+        values.append(adjusted_right_value)
+        selected_keys.append(right_series_key if adjusted_right_value is not None else None)
+        states.append("right" if adjusted_right_value is not None else None)
+        left_weights.append(0.0)
+        right_weights.append(1.0 if adjusted_right_value is not None else 0.0)
+
+    out = pd.DataFrame(
+        {
+            "value": pd.Series(values, index=left_aligned.index, dtype="float64"),
+            "selected_input_series_key": pd.Series(
+                selected_keys,
+                index=left_aligned.index,
+                dtype="object",
+            ),
+            "splice_state": pd.Series(states, index=left_aligned.index, dtype="object"),
+            "splice_anchor_obs_date": anchor_obs_date,
+            "splice_anchor_left_value": anchor_left_value,
+            "splice_anchor_right_value": anchor_right_value,
+            "splice_scale": splice_scale,
+            "splice_offset": splice_offset,
+            "splice_left_weight": left_weights,
+            "splice_right_weight": right_weights,
+        }
+    )
+    out = out.dropna(subset=["value"])
+    out.index = _coerce_utc_index(out.index)
+    return out.sort_index()
+
+
+def apply_coalesce_obs_path_transform(
+    snapshots: Mapping[str, pd.Series],
+    spec: PITTransformSpec,
+) -> pd.DataFrame:
+    """Apply a coalesce/splice transform over ordered PIT snapshots."""
+    if spec.axis != "obs_path":
+        raise PITContractError("apply_coalesce_obs_path_transform requires axis='obs_path'.")
+    if spec.op != "coalesce":
+        raise PITContractError("apply_coalesce_obs_path_transform requires op='coalesce'.")
+    validate_transform_spec(spec)
+
+    ordered_keys = transform_input_series_keys(spec)
+    union_index = pd.DatetimeIndex([], tz="UTC")
+    aligned_inputs: dict[str, pd.Series] = {}
+
+    for key in ordered_keys:
+        series = snapshots.get(key)
+        if series is None or series.empty:
+            prepared = pd.Series(dtype="float64")
+        else:
+            prepared = _as_numeric(series.copy().sort_index())
+            prepared.index = _coerce_utc_index(prepared.index)
+        aligned_inputs[key] = prepared
+        if not prepared.empty:
+            union_index = union_index.union(prepared.index)
+
+    if len(union_index) == 0:
+        return pd.DataFrame(
+            {
+                "value": pd.Series(dtype="float64"),
+                "selected_input_series_key": pd.Series(dtype="object"),
+            }
+        )
+
+    matrix = pd.DataFrame(
+        {key: aligned_inputs[key].reindex(union_index) for key in ordered_keys},
+        index=union_index,
+    )
+    any_value = matrix.notna().any(axis=1)
+    selected = pd.Series(pd.NA, index=matrix.index, dtype="object")
+    if any_value.any():
+        selected.loc[any_value] = matrix.loc[any_value].notna().idxmax(axis=1)
+
+    value = matrix.bfill(axis=1).iloc[:, 0]
+    out = pd.DataFrame(
+        {
+            "value": _as_numeric(value),
+            "selected_input_series_key": selected,
+        },
+        index=matrix.index,
+    )
+    out = out.dropna(subset=["value"])
+    out.index = _coerce_utc_index(out.index)
+    return out.sort_index()
+
+
 def apply_revision_path_transform(
     timeline: pd.Series,
     spec: PITTransformSpec,
@@ -771,9 +1256,7 @@ def apply_revision_path_transform(
     s = timeline.copy().sort_index()
     s = _as_numeric(s)
     s.index = _coerce_utc_index(s.index)
-    if engine == "duckdb":
-        return _apply_series_op_duckdb(s, spec)
-    return _apply_series_op_python(s, spec)
+    return _apply_series_runner(s, spec, engine=engine)
 
 
 def serialize_params_for_lineage(params: Mapping[str, Any]) -> str:
@@ -794,3 +1277,130 @@ def ensure_callable(path_func: Callable[[pd.Series], Any]) -> Callable[[pd.Serie
     if not callable(path_func):
         raise PITValidationError("Provided path function is not callable.")
     return path_func
+
+
+_ALLOWED_AGGS: set[str] = {
+    "count",
+    "first",
+    "last",
+    "max",
+    "mean",
+    "min",
+    "std",
+    "sum",
+    "var",
+}
+
+_OPERATORS: dict[TransformOp, TransformOperatorDef] = {
+    "resample": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"rule", "agg"},
+        normalize=_normalize_resample_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: _is_duckdb_rule_supported(str(params["rule"])),
+        python_runner=_run_resample_python,
+        duckdb_runner=_run_resample_duckdb,
+    ),
+    "aggregate": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"rule", "agg"},
+        normalize=_normalize_aggregate_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: (
+            True if params.get("rule") is None else _is_duckdb_rule_supported(str(params["rule"]))
+        ),
+        python_runner=_run_aggregate_python,
+        duckdb_runner=_run_aggregate_duckdb,
+    ),
+    "rolling": TransformOperatorDef(
+        allowed_axes=("obs_path", "revision_path"),
+        param_keys={"window", "min_periods", "agg"},
+        normalize=_normalize_rolling_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: True,
+        python_runner=_run_rolling_python,
+        duckdb_runner=_run_rolling_duckdb,
+    ),
+    "expanding": TransformOperatorDef(
+        allowed_axes=("obs_path", "revision_path"),
+        param_keys={"min_periods", "agg"},
+        normalize=_normalize_expanding_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: True,
+        python_runner=_run_expanding_python,
+        duckdb_runner=_run_expanding_duckdb,
+    ),
+    "lag": TransformOperatorDef(
+        allowed_axes=("obs_path", "revision_path"),
+        param_keys={"periods"},
+        normalize=lambda params, include_callable: _normalize_periods_params(
+            "lag", params, include_callable
+        ),
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: True,
+        python_runner=_run_lag_python,
+        duckdb_runner=_run_lag_duckdb,
+    ),
+    "diff": TransformOperatorDef(
+        allowed_axes=("obs_path", "revision_path"),
+        param_keys={"periods"},
+        normalize=lambda params, include_callable: _normalize_periods_params(
+            "diff", params, include_callable
+        ),
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: True,
+        python_runner=_run_diff_python,
+        duckdb_runner=_run_diff_duckdb,
+    ),
+    "pct_change": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"periods"},
+        normalize=lambda params, include_callable: _normalize_periods_params(
+            "pct_change", params, include_callable
+        ),
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: True,
+        python_runner=_run_pct_change_python,
+        duckdb_runner=_run_pct_change_duckdb,
+    ),
+    "ffill": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"limit"},
+        normalize=_normalize_ffill_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: False,
+        python_runner=_run_ffill_python,
+    ),
+    "binary": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"right_series_key", "operator", "join", "fill_value"},
+        normalize=_normalize_binary_params,
+        input_series_keys=_binary_input_series_keys,
+        input_kind="multi",
+        duckdb_supports=lambda params: False,
+    ),
+    "coalesce": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"other_series_keys"},
+        normalize=_normalize_coalesce_params,
+        input_series_keys=_coalesce_input_series_keys,
+        input_kind="multi",
+        duckdb_supports=lambda params: False,
+    ),
+    "splice": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"right_series_key", "adjustment", "transition_periods", "join"},
+        normalize=_normalize_splice_params,
+        input_series_keys=_splice_input_series_keys,
+        input_kind="multi",
+        duckdb_supports=lambda params: False,
+    ),
+    "path_apply": TransformOperatorDef(
+        allowed_axes=("obs_path",),
+        param_keys={"udf_name", "func"},
+        normalize=_normalize_path_apply_params,
+        input_series_keys=_default_input_series_keys,
+        duckdb_supports=lambda params: False,
+        python_runner=_run_path_apply_python,
+    ),
+}

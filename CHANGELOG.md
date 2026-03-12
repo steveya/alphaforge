@@ -3,7 +3,12 @@
 ## Unreleased
 
 - Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
-
+- Made `FeatureRequest.tags` live during dataset builds, merging request tags into feature catalogs and enabling end-to-end importance attribution from dataset artifacts.
+- Added PIT operator registry infrastructure so validation, engine support, multi-input arity, and lineage are defined per operator instead of hard-coded transform branches.
+- Added PIT `obs_path` operators `pct_change`, `ffill`, and `coalesce`.
+- Expanded PIT aggregation support for `resample`, `aggregate`, `rolling`, and `expanding` with `count`, `std`, and `var`.
+- Added row-level splice lineage for `coalesce`, including ordered input keys, selected source series key, and selected source vintage timestamp.
+- Added a runnable example for PIT splice + temporal transforms + importance attribution (`examples/pit_splice_importance.py`) and documented it in `docs/guides/pit.md`.
 - Added PIT contract version API (`PIT_CONTRACT_VERSION`, `get_pit_contract_version`) and migration guide support.
 - Added ingestion policy modes for PIT upserts: `strict=\"error|warn|coerce\"` (`bool` remains backward compatible).
 - Added release selection helpers: `list_release_stream(...)` and `resolve_release(...)`.

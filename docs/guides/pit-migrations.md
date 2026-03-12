@@ -12,6 +12,16 @@ This guide tracks PIT contract versions and required migration actions for break
 
 ## Entries
 
+### Version 2.1.0
+
+- **Date:** 2026-03-10
+- **Change Type:** non-breaking
+- **Summary:** Added adjusted PIT `splice`, explicit PIT fold generators, and filtered vs retrospective snapshot-tape contracts.
+- **Required Actions:**
+  1. Existing transform, pipeline, and expression-graph code remains valid without changes.
+  2. Use `splice` instead of hand-rolled continuation logic when ratio/additive adjusted PIT continuation is required.
+  3. Prefer `iter_walk_forward_folds(...)`, `iter_purged_kfold_folds(...)`, and `build_snapshot_tape(...)` for training/validation/filtering loops so as-of semantics are explicit.
+
 ### Version 2.0.0
 
 - **Date:** 2026-02-28

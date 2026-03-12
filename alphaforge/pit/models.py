@@ -10,6 +10,8 @@ import pandas as pd
 from .exceptions import PITContractError
 
 JoinMode = Literal["inner", "left", "right", "outer"]
+PITFoldMode = Literal["walk_forward", "purged_kfold"]
+PITSequenceMode = Literal["filtered", "smoothed_research"]
 
 
 class ReleaseRankPolicy(TypedDict):
@@ -167,6 +169,24 @@ class SnapshotSeriesSpec:
     release_policy: ReleaseSelectionPolicy = "latest"
 
 
+@dataclass(frozen=True)
+class PITFoldSpec:
+    fold_id: str
+    fold_mode: PITFoldMode
+    train_asofs: tuple[pd.Timestamp, ...]
+    validation_asofs: tuple[pd.Timestamp, ...]
+    purge: int = 0
+    embargo: int = 0
+
+
+@dataclass(frozen=True)
+class PITTapeSpec:
+    series_specs: tuple[SnapshotSeriesSpec, ...]
+    step_asofs: tuple[pd.Timestamp, ...]
+    mode: PITSequenceMode = "filtered"
+    terminal_asof: pd.Timestamp | None = None
+
+
 def _cast_or_none(value: object) -> str | None:
     if value is None:
         return None
@@ -299,6 +319,102 @@ def coerce_snapshot_series_spec(
         start_ref=start_ref,
         end_ref=end_ref,
         release_policy=release_policy,
+    )
+
+
+def _coerce_asof_tuple(values: object, *, field_name: str) -> tuple[pd.Timestamp, ...]:
+    if isinstance(values, pd.DatetimeIndex):
+        idx = pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+    elif isinstance(values, (list, tuple)):
+        idx = pd.DatetimeIndex(pd.to_datetime(list(values), utc=True))
+    else:
+        raise PITContractError(f"{field_name} must be a list, tuple, or DatetimeIndex.")
+
+    if len(idx) == 0:
+        raise PITContractError(f"{field_name} must contain at least one as-of timestamp.")
+    idx = idx.sort_values().unique()
+    return tuple(pd.Timestamp(ts) for ts in idx)
+
+
+def _coerce_utc_timestamp(value: object, *, field_name: str) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if pd.isna(ts):
+        raise PITContractError(f"{field_name} must be a valid timestamp.")
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+
+
+def coerce_pit_tape_spec(
+    spec: PITTapeSpec | Mapping[str, Any],
+) -> PITTapeSpec:
+    if isinstance(spec, PITTapeSpec):
+        if not spec.series_specs:
+            raise PITContractError("PITTapeSpec requires at least one SnapshotSeriesSpec.")
+        if not spec.step_asofs:
+            raise PITContractError("PITTapeSpec requires at least one step_asof.")
+        normalized_step_asofs = _coerce_asof_tuple(spec.step_asofs, field_name="step_asofs")
+        normalized_terminal = (
+            _coerce_utc_timestamp(spec.terminal_asof, field_name="terminal_asof")
+            if spec.terminal_asof is not None
+            else None
+        )
+        if spec.mode not in {"filtered", "smoothed_research"}:
+            raise PITContractError("PITTapeSpec mode must be 'filtered' or 'smoothed_research'.")
+        if spec.mode == "filtered" and normalized_terminal is not None:
+            raise PITContractError("terminal_asof is only valid when mode='smoothed_research'.")
+        if (
+            spec.mode == "smoothed_research"
+            and normalized_terminal is not None
+            and normalized_terminal < max(normalized_step_asofs)
+        ):
+            raise PITContractError(
+                "terminal_asof must be >= the latest step_asof for smoothed_research tapes."
+            )
+        return PITTapeSpec(
+            series_specs=tuple(spec.series_specs),
+            step_asofs=normalized_step_asofs,
+            mode=spec.mode,
+            terminal_asof=normalized_terminal,
+        )
+
+    if not isinstance(spec, Mapping):
+        raise PITContractError("PIT tape spec must be PITTapeSpec or a mapping.")
+
+    allowed_keys = {"series_specs", "step_asofs", "mode", "terminal_asof"}
+    unknown_keys = sorted(set(spec.keys()) - allowed_keys)
+    if unknown_keys:
+        raise PITContractError(f"Unknown PIT tape spec keys: {unknown_keys}")
+
+    raw_series_specs = spec.get("series_specs")
+    if not isinstance(raw_series_specs, (list, tuple)):
+        raise PITContractError("PIT tape spec requires 'series_specs' as a list/tuple.")
+    series_specs = tuple(coerce_snapshot_series_spec(item) for item in raw_series_specs)
+    if not series_specs:
+        raise PITContractError("PIT tape spec requires at least one SnapshotSeriesSpec.")
+
+    step_asofs = _coerce_asof_tuple(spec.get("step_asofs"), field_name="step_asofs")
+
+    mode = str(spec.get("mode", "filtered")).strip().lower()
+    if mode not in {"filtered", "smoothed_research"}:
+        raise PITContractError("PIT tape spec mode must be 'filtered' or 'smoothed_research'.")
+
+    terminal_asof = spec.get("terminal_asof")
+    terminal = (
+        _coerce_utc_timestamp(terminal_asof, field_name="terminal_asof")
+        if terminal_asof is not None
+        else None
+    )
+    if mode == "filtered" and terminal is not None:
+        raise PITContractError("terminal_asof is only valid when mode='smoothed_research'.")
+    if terminal is not None and terminal < max(step_asofs):
+        raise PITContractError(
+            "terminal_asof must be >= the latest step_asof for smoothed_research tapes."
+        )
+
+    return PITTapeSpec(
+        series_specs=series_specs,
+        step_asofs=step_asofs,
+        mode=mode,  # type: ignore[arg-type]
+        terminal_asof=terminal,
     )
 
 

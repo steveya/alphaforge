@@ -4,8 +4,10 @@ Alphaforge PIT provides:
 
 1. PIT ingestion and retrieval (`PITAccessor`)
 2. PIT-preserving transforms (`preview_transform`, `apply_transform`)
-3. PIT safety and integration (`ReleaseLagPolicy`, `PITDataSource`)
-4. Revision/staleness helpers (`alphaforge.pit.tasks`)
+3. PIT execution contexts for folds and sequence/tape materialization
+4. PIT safety and integration (`ReleaseLagPolicy`, `PITDataSource`)
+5. Revision/staleness helpers (`alphaforge.pit.tasks`)
+6. Model-importance attribution back to dataset source fields and request tags
 
 ## Canonical PIT schema
 
@@ -53,6 +55,21 @@ record = pit.resolve_release(
 
 ## Transform API
 
+### PIT operator capability map
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Single-series temporal ops | supported now | `lag`, `diff`, `pct_change`, `ffill` |
+| Temporal aggregation | supported now | `resample`, `aggregate`, `rolling`, `expanding` with `first`, `last`, `min`, `max`, `mean`, `sum`, `count`, `std`, `var` |
+| PIT-safe cross-series arithmetic | supported now | `binary` |
+| PIT-safe ordered fallback | supported now | `coalesce` with ordered precedence and row-level selected-input lineage |
+| PIT-safe adjusted continuation | supported now | `splice` with `ratio` / `add`, hard switch or transition blending, and row-level calibration lineage |
+| Multi-series formulas | supported via expression graph | deterministic alias-based graphs, union-vintage aligned |
+| Walk-forward and purged PIT folds | supported now | explicit as-of-grid based fold generators |
+| Live-safe snapshot tapes | supported now | `filtered` mode uses each step’s own as-of |
+| Retrospective research tapes | research-only | `smoothed_research` requires explicit opt-in |
+| Broader SQL/pandas parity | planned next | more operators will be layered on the same PIT operator framework instead of a separate DSL |
+
 ### Single-series path transforms (`obs_path`)
 
 ```python
@@ -70,6 +87,14 @@ spec = PITTransformSpec(
 preview = pit.preview_transform(spec)
 result = pit.apply_transform(spec, overwrite=True)
 ```
+
+Additional `obs_path` operators:
+
+- `pct_change` with `params={"periods": n}`
+- `ffill` with optional `params={"limit": n}`
+- `coalesce` with `params={"other_series_keys": [...]}` for ordered PIT-safe fallback
+- `splice` with `params={"right_series_key": ..., "adjustment": "ratio|add", "transition_periods": n, "join": "outer|inner|left|right"}` for PIT-safe adjusted continuation
+- `rolling` / `expanding` / `aggregate` / `resample` now also support `count`, `std`, and `var`
 
 ### Cross-series transform (`op="binary"`)
 
@@ -91,6 +116,181 @@ spec = PITTransformSpec(
 
 result = pit.apply_transform(spec, overwrite=True)
 ```
+
+### PIT-safe splice + attribution example
+
+```python
+# docs-example: pit_splice_importance
+import importlib.util
+from pathlib import Path
+
+example_path = Path.cwd() / "examples" / "pit_splice_importance.py"
+spec = importlib.util.spec_from_file_location("pit_splice_importance_example", example_path)
+module = importlib.util.module_from_spec(spec)
+assert spec is not None and spec.loader is not None
+spec.loader.exec_module(module)
+
+outputs = module.run_example(TMP_DIR)
+assert outputs["selected_fallback_series_key"] == "ALT"
+assert outputs["selected_fallback_asof"] == "2024-04-05T00:00:00+00:00"
+assert float(outputs["tag_rollup"].loc["raw", "importance"]) == 0.7
+```
+
+This example does four things end-to-end:
+
+1. Ingests revised PIT observations.
+2. Splices a sparse primary series with `coalesce`.
+3. Derives PIT-safe temporal transforms (`pct_change`, `aggregate(count)`).
+4. Builds a dataset artifact, stamps `FeatureRequest.tags` into the catalog, and rolls model importance back up by source fields and tags.
+
+### Adjusted splice (`op="splice"`)
+
+`splice` is pairwise and `obs_path`-only in this milestone.
+
+- `ratio` rescales the right-hand series using the last overlapping non-null point visible inside the same as-of snapshot.
+- `add` shifts the right-hand series by the same anchor rule.
+- `transition_periods=0` is a hard switch.
+- `transition_periods>0` performs a PIT-safe linear blend from left to adjusted-right over the first `n` obs dates at or after the right-hand handoff date.
+- If no overlap is visible yet, the adjusted handoff region remains unavailable and is omitted from persisted output until calibration exists.
+
+```python
+spec = PITTransformSpec(
+    input_series_key="OLD_SERIES",
+    output_series_key="CONT_SERIES",
+    axis="obs_path",
+    op="splice",
+    params={
+        "right_series_key": "NEW_SERIES",
+        "adjustment": "ratio",      # ratio | add
+        "transition_periods": 2,    # optional
+        "join": "outer",            # optional
+    },
+)
+
+preview = pit.preview_transform(spec)
+result = pit.apply_transform(spec, overwrite=True)
+```
+
+Row lineage records:
+
+- both source series keys
+- source as-of timestamps by side
+- anchor obs date and anchor values
+- computed scale/offset
+- transition length and per-row blend weights
+
+## PIT execution contexts
+
+### Walk-forward and purged folds
+
+Fold generators operate on an explicit as-of grid instead of inferring business-day spacing.
+
+```python
+# docs-example: pit_execution_contexts
+import pandas as pd
+from alphaforge.pit import (
+    PITAccessor,
+    PITTapeSpec,
+    SnapshotSeriesSpec,
+    build_snapshot_tape,
+    iter_purged_kfold_folds,
+    iter_walk_forward_folds,
+)
+from alphaforge.store.duckdb_parquet import DuckDBParquetStore
+
+store = DuckDBParquetStore(root=str(TMP_DIR))
+pit = PITAccessor(store.conn())
+pit.upsert_pit_observations(
+    pd.DataFrame(
+        {
+            "series_key": ["GDP", "GDP", "GDP"],
+            "obs_date": [
+                pd.Timestamp("2024-12-31"),
+                pd.Timestamp("2024-12-31"),
+                pd.Timestamp("2025-03-31"),
+            ],
+            "asof_utc": [
+                pd.Timestamp("2025-01-10", tz="UTC"),
+                pd.Timestamp("2025-02-10", tz="UTC"),
+                pd.Timestamp("2025-04-10", tz="UTC"),
+            ],
+            "value": [1.0, 1.2, 2.0],
+        }
+    )
+)
+
+asof_grid = pd.DatetimeIndex(
+    [
+        pd.Timestamp("2025-01-15", tz="UTC"),
+        pd.Timestamp("2025-02-15", tz="UTC"),
+        pd.Timestamp("2025-03-15", tz="UTC"),
+        pd.Timestamp("2025-04-15", tz="UTC"),
+    ]
+)
+
+walk_forward = list(
+    iter_walk_forward_folds(
+        asof_grid,
+        train_size=2,
+        validation_size=1,
+        purge=1,
+    )
+)
+purged = list(iter_purged_kfold_folds(asof_grid, n_splits=2, purge=1, embargo=0))
+
+filtered_tape = build_snapshot_tape(
+    pit,
+    PITTapeSpec(
+        series_specs=(SnapshotSeriesSpec(series_key="GDP", alias="gdp_latest"),),
+        step_asofs=(pd.Timestamp("2025-01-15", tz="UTC"), pd.Timestamp("2025-03-15", tz="UTC")),
+        mode="filtered",
+    ),
+)
+smoothed_tape = build_snapshot_tape(
+    pit,
+    {
+        "series_specs": [{"series_key": "GDP", "alias": "gdp_latest"}],
+        "step_asofs": [
+            pd.Timestamp("2025-01-15", tz="UTC"),
+            pd.Timestamp("2025-03-15", tz="UTC"),
+        ],
+        "mode": "smoothed_research",
+    },
+    allow_research=True,
+)
+
+assert len(walk_forward) == 1
+assert len(purged) == 2
+filtered_step = filtered_tape[
+    (filtered_tape["step_asof_utc"] == pd.Timestamp("2025-01-15", tz="UTC"))
+    & (filtered_tape["obs_date"] == pd.Timestamp("2024-12-31", tz="UTC"))
+].iloc[0]
+smoothed_step = smoothed_tape[
+    (smoothed_tape["step_asof_utc"] == pd.Timestamp("2025-01-15", tz="UTC"))
+    & (smoothed_tape["obs_date"] == pd.Timestamp("2024-12-31", tz="UTC"))
+].iloc[0]
+assert filtered_step["value"] == 1.0
+assert smoothed_step["value"] == 1.2
+assert smoothed_step["sequence_mode"] == "smoothed_research"
+```
+
+### Snapshot tape contract
+
+`build_snapshot_tape(...)` returns a long-form frame with:
+
+- `step_asof_utc`
+- `materialized_asof_utc`
+- `obs_date`
+- `series_key`
+- `series_alias`
+- `value`
+- `source_asof_utc`
+- `sequence_mode`
+
+Use modes as follows:
+
+- `filtered`: decision-safe, validation-safe, and live-like. Each step uses only data visible at that step’s own as-of.
+- `smoothed_research`: explicit retrospective mode for smoothing/backward-pass research. Each step is materialized with a terminal retrospective as-of and requires `allow_research=True`.
 
 ### Experimental revision timeline transforms (`revision_path`)
 
@@ -189,7 +389,8 @@ panel = pit.build_snapshot_panel(
 - `engine="auto"` prefers `duckdb` for supported op+axis+params combinations.
 - `engine="duckdb"` raises `PITEngineError` when a spec is unsupported.
 - Set `on_engine_mismatch="fallback"` to force deterministic fallback to `python`.
-- `path_apply` and `binary` currently execute on Python only.
+- `pct_change` is available on both Python and DuckDB.
+- `ffill`, `coalesce`, `splice`, `path_apply`, and `binary` currently execute on Python only.
 
 ## Revision analytics and staleness helpers
 

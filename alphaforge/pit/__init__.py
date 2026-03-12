@@ -1,5 +1,15 @@
 from .accessor import PITAccessor, ensure_pit_table
 from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
+from .gdp import (
+    GDPC1_QOQ_SAAR_RF_REL_GRAPH_ID,
+    GDPC1_QOQ_SAAR_RF_REL_SERIES_KEY,
+    GDPC1_QOQ_SAAR_RF_RT_GRAPH_ID,
+    GDPC1_QOQ_SAAR_RF_RT_SERIES_KEY,
+    apply_gdpc1_qoq_saar_rf_rel,
+    apply_gdpc1_qoq_saar_rf_rt,
+    gdpc1_qoq_saar_rf_rel_graph,
+    gdpc1_qoq_saar_rf_rt_graph,
+)
 from .exceptions import (
     PITCausalityError,
     PITContractError,
@@ -15,9 +25,13 @@ from .models import (
     PITExpressionGraphResult,
     PITExpressionGraphSpec,
     PITExpressionNode,
+    PITFoldSpec,
+    PITTapeSpec,
+    PITSequenceMode,
     ReleaseRecord,
     ReleaseSelectionPolicy,
     SnapshotSeriesSpec,
+    coerce_pit_tape_spec,
     coerce_expression_graph_spec,
     coerce_snapshot_series_spec,
 )
@@ -29,8 +43,11 @@ from .pipelines import (
 )
 from .ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .tasks import (
+    build_snapshot_tape,
     first_vintage_snapshot,
     forward_fill_with_staleness,
+    iter_purged_kfold_folds,
+    iter_walk_forward_folds,
     latest_vintage_snapshot,
     qoq,
     revision_deltas,
@@ -65,6 +82,10 @@ __all__ = [
     "PITExpressionGraphSpec",
     "PITExpressionGraphResult",
     "coerce_expression_graph_spec",
+    "PITFoldSpec",
+    "PITTapeSpec",
+    "PITSequenceMode",
+    "coerce_pit_tape_spec",
     "ReleaseSelectionPolicy",
     "ReleaseRecord",
     "SnapshotSeriesSpec",
@@ -72,6 +93,14 @@ __all__ = [
     "PITContractVersion",
     "PIT_CONTRACT_VERSION",
     "get_pit_contract_version",
+    "GDPC1_QOQ_SAAR_RF_RT_SERIES_KEY",
+    "GDPC1_QOQ_SAAR_RF_REL_SERIES_KEY",
+    "GDPC1_QOQ_SAAR_RF_RT_GRAPH_ID",
+    "GDPC1_QOQ_SAAR_RF_REL_GRAPH_ID",
+    "gdpc1_qoq_saar_rf_rt_graph",
+    "gdpc1_qoq_saar_rf_rel_graph",
+    "apply_gdpc1_qoq_saar_rf_rt",
+    "apply_gdpc1_qoq_saar_rf_rel",
     "PITValidationReport",
     "validate_pit_observations",
     "ReleaseLagPolicy",
@@ -88,6 +117,9 @@ __all__ = [
     "forward_fill_with_staleness",
     "yoy",
     "qoq",
+    "iter_walk_forward_folds",
+    "iter_purged_kfold_folds",
+    "build_snapshot_tape",
     "make_ref_entity_id",
     "parse_ref_entity_id",
 ]

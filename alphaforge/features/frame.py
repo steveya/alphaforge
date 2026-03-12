@@ -1,4 +1,4 @@
-import json  # added
+import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -58,8 +58,21 @@ class FeatureFrame:
             merged_tags = [dict(tags)] * len(cat)
         else:
             merged_tags = []
-            for existing in cat["tags"].tolist():
-                existing_dict = existing if isinstance(existing, dict) else {}
+            for existing, existing_json in zip(
+                cat["tags"].tolist(),
+                cat["tags_json"].tolist(),
+                strict=False,
+            ):
+                existing_dict: Dict[str, Any] = {}
+                if isinstance(existing, dict):
+                    existing_dict = dict(existing)
+                elif isinstance(existing_json, str) and existing_json.strip():
+                    try:
+                        parsed = json.loads(existing_json)
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        existing_dict = dict(parsed)
                 upd = dict(existing_dict)
                 upd.update(tags or {})
                 merged_tags.append(upd)

@@ -231,6 +231,8 @@ def build_dataset(
     for req in spec.features:
         s = _apply_override(base_slice, req.slice_override)
         ff = _materialize_template(ctx, req.template, req.params, s)
+        if req.tags:
+            ff = ff.set_tags(req.tags, overwrite=False)
 
         # Detect template leakage: warn if template returned timestamps beyond the slice.asof
         try:
