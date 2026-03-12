@@ -242,3 +242,5 @@ Use `PITDataSource.snapshot_query(...)` and `PITDataSource.observations_query(..
 ## Type annotations
 
 All public PIT APIs carry complete type annotations. `release_policy` parameters accept `ReleaseSelectionPolicy | Mapping[str, Any] | str`; the TypedDict union is narrowed internally before key access.
+
+`iter_walk_forward_folds` uses a type-narrowing assertion to guarantee `required_train` is a non-None `int` after the guard that requires at least one of `train_size` or `min_train_size` to be provided.

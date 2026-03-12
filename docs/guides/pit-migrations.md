@@ -39,3 +39,10 @@ This guide tracks PIT contract versions and required migration actions for break
 - **Change Type:** non-breaking
 - **Summary:** Fixed stale `type: ignore` comments and TypedDict narrowing in `pit/models.py` and `pit/accessor.py`. No runtime behavior change.
 - **Required Actions:** None.
+
+### Version 2.0.2
+
+- **Date:** 2026-03-12
+- **Change Type:** non-breaking
+- **Summary:** Code-quality fixes only — import block sorting, removal of unused imports, and mypy type-narrowing assertion in `iter_walk_forward_folds`. No public API or runtime behavior change.
+- **Required Actions:** None.
