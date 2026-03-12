@@ -10,7 +10,6 @@ import pytest
 from alphaforge.data.public_web.cftc_cot import CFTCCoTSource, _publication_date
 from alphaforge.data.query import Query
 
-
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures/public_web/cftc_cot"
 
 
@@ -136,7 +135,7 @@ class TestCFTCCoTSource:
                 end=pd.Timestamp("2026-02-01", tz="UTC"),
             )
         )
-        assert str(df["date"].dtype).startswith("datetime64[ns,")
+        assert str(df["date"].dtype).startswith("datetime64[") and "UTC" in str(df["date"].dtype)
 
     def test_publication_date_is_friday(self) -> None:
         """Publication date should always be a Friday (3 bdays after Tuesday report)."""

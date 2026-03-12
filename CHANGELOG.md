@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
+- Fixed linting errors: sorted import blocks (ruff I001) in `alphaforge/__init__.py`, `alphaforge/pit/__init__.py`, `alphaforge/pit/accessor.py`, `alphaforge/pit/gdp.py`, `alphaforge/pit/tasks.py`; removed unused imports (ruff F401) in `alphaforge/data/public_web/cftc_cot.py`.
+- Fixed mypy type narrowing error in `iter_walk_forward_folds` (`pit/tasks.py`): replaced `int(min_train_size)` with a direct reference guarded by a type-narrowing assertion.
+- Updated CFTC CoT test to accept both `datetime64[ns, UTC]` and `datetime64[us, UTC]` datetime dtypes for compatibility with newer pandas versions.
 - Made `FeatureRequest.tags` live during dataset builds, merging request tags into feature catalogs and enabling end-to-end importance attribution from dataset artifacts.
 - Added PIT operator registry infrastructure so validation, engine support, multi-input arity, and lineage are defined per operator instead of hard-coded transform branches.
 - Added PIT `obs_path` operators `pct_change`, `ffill`, and `coalesce`.

@@ -19,7 +19,6 @@ Example entity IDs::
 from __future__ import annotations
 
 import re
-from datetime import timedelta
 from pathlib import Path
 from typing import Sequence
 
@@ -30,7 +29,7 @@ from alphaforge.data.schema import TableSchema
 from alphaforge.data.source import DataSource
 
 from .http import CachedHttpClient
-from .parsing import normalize_headers, parse_zip_csv_bytes
+from .parsing import normalize_headers
 from .utils import (
     apply_query_filters,
     ensure_date_utc,
