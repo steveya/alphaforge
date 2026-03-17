@@ -52,12 +52,13 @@ exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
 packages = [
   "alphaforge",
   "alphaforge.data",
-  "alphaforge.time",
-  "alphaforge.store",
-  "alphaforge.pit",
-  "alphaforge.features",
-  "alphaforge.splits",
+  "alphaforge.data.public_web",
   "alphaforge.diagnostics",
+  "alphaforge.features",
+  "alphaforge.pit",
+  "alphaforge.splits",
+  "alphaforge.store",
+  "alphaforge.time",
 ]
 
 [tool.setuptools_scm]
