@@ -1,5 +1,6 @@
 include README.md
 include LICENSE
 recursive-include alphaforge *.py
+recursive-include alphaforge *.yaml
 recursive-include docs *.md
 recursive-exclude alphaforge_demo_store *
