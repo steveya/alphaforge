@@ -1,8 +1,16 @@
 """AlphaForge: general-purpose data/feature management for financial ML."""
 
 from .data.context import DataContext
+from .data.fred_source import FREDDataSource
 from .data.panel import PanelFrame
 from .data.pit_source import PITDataSource
+from .data.short_rates import (
+    ShortRateDataset,
+    build_duan_weekly_dataset,
+    build_kim_orphanides_dataset,
+    build_macro_finance_dataset,
+    build_policy_rule_dataset,
+)
 from .data.public_web import (
     ANPFuelPricesDataSource,
     B3HistoricalQuotesDataSource,
@@ -20,8 +28,10 @@ from .data.public_web import (
     EurexStatsDailySource,
     EurostatDataSource,
     EzoicAdRevenueDailySource,
+    FRBTermStructureBenchmarkSource,
     IBGESidraDataSource,
     LCHCDSClearDailySource,
+    PhiladelphiaSPFMeanLevelSource,
 )
 from .data.query import Query
 from .data.schema import TableSchema
@@ -91,10 +101,12 @@ from .time.ref_period import RefFreq, RefPeriod
 
 __all__ = [
     "DataContext",
+    "FREDDataSource",
     "Query",
     "TableSchema",
     "PanelFrame",
     "PITDataSource",
+    "ShortRateDataset",
     "BLSDataSource",
     "BEADataSource",
     "EIADataSource",
@@ -113,6 +125,12 @@ __all__ = [
     "EurexRefdataContractsSource",
     "LCHCDSClearDailySource",
     "EzoicAdRevenueDailySource",
+    "FRBTermStructureBenchmarkSource",
+    "PhiladelphiaSPFMeanLevelSource",
+    "build_kim_orphanides_dataset",
+    "build_policy_rule_dataset",
+    "build_duan_weekly_dataset",
+    "build_macro_finance_dataset",
     "Universe",
     "EntityMetadata",
     "TradingCalendar",

@@ -19,9 +19,11 @@ from .eurex_refdata_contracts import EurexRefdataContractsSource
 from .eurex_stats_daily import EurexStatsDailySource
 from .eurostat import EurostatDataSource
 from .ezoic_adrevenue_daily import EzoicAdRevenueDailySource
+from .frb_term_structure import FRBTermStructureBenchmarkSource
 from .ibge_sidra import IBGESidraDataSource
 from .lch_cdsclear_daily import LCHCDSClearDailySource
 from .mof_jgb import MOFJGBYieldCurveSource
+from .philadelphia_spf import PhiladelphiaSPFMeanLevelSource
 
 
 def default_public_web_sources() -> dict[str, DataSource]:
@@ -44,6 +46,8 @@ def default_public_web_sources() -> dict[str, DataSource]:
         EurexStatsDailySource(),
         LCHCDSClearDailySource(),
         EzoicAdRevenueDailySource(),
+        PhiladelphiaSPFMeanLevelSource(),
+        FRBTermStructureBenchmarkSource(),
         EurexRefdataContractsSource(
             api_url="https://www.eurex.com/api/refdata/contracts"
         ),
