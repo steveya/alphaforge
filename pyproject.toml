@@ -13,6 +13,7 @@ authors = [{ name = "steveya" }]
 dependencies = [
     "duckdb>=0.9.2",
     "numpy>=1.23",
+    "openpyxl>=3.1",
     "pandas>=2.0",
     "python-dateutil>=2.9.0.post0",
     "pyarrow>=14.0.1",
@@ -50,19 +51,11 @@ Issues = "https://github.com/steveya/alphaforge/issues"
 include-package-data = true
 exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
 
+[tool.setuptools.packages.find]
+include = ["alphaforge", "alphaforge.*"]
+
 [tool.setuptools.package-data]
 alphaforge = ["**/*.yaml"]
-packages = [
-  "alphaforge",
-  "alphaforge.data",
-  "alphaforge.data.public_web",
-  "alphaforge.diagnostics",
-  "alphaforge.features",
-  "alphaforge.pit",
-  "alphaforge.splits",
-  "alphaforge.store",
-  "alphaforge.time",
-]
 
 [tool.setuptools_scm]
 version_scheme = "no-guess-dev"

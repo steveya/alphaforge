@@ -25,7 +25,10 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 if load_dotenv is not None:
-    load_dotenv()
+    try:
+        load_dotenv()
+    except OSError:  # stale editable-install path may not exist
+        pass
 
 
 RUN_NETWORK = os.getenv("ALPHAFORGE_NETWORK_TESTS") == "1"
