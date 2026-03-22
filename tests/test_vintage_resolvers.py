@@ -241,6 +241,31 @@ class TestFrozenResolver:
         assert payems_result == date(2024, 6, 7)
         assert gdp_result != payems_result
 
+    def test_lookahead_guard_filters_future_vintages(self, revision_map: dict) -> None:
+        """FrozenResolver must not return vintages after requested_asof."""
+        resolver = FrozenResolver(revision_map=revision_map, n_releases=3)
+        # requested_asof is before the 3rd release (2024-06-27),
+        # so only 2 releases are valid → returns 2nd release
+        result = resolver.resolve(
+            series_key="GDP",
+            obs_date=date(2024, 3, 31),
+            requested_asof=date(2024, 6, 1),
+            has_pit=True,
+        )
+        assert result == date(2024, 5, 30)  # 2nd release (latest valid)
+
+    def test_lookahead_guard_no_valid_vintages(self, revision_map: dict) -> None:
+        """If requested_asof is before all vintages, fall back to requested_asof."""
+        resolver = FrozenResolver(revision_map=revision_map, n_releases=3)
+        asof = date(2024, 1, 1)
+        result = resolver.resolve(
+            series_key="GDP",
+            obs_date=date(2024, 3, 31),
+            requested_asof=asof,
+            has_pit=True,
+        )
+        assert result == asof  # no valid vintages → fall through
+
     def test_empty_revision_map(self) -> None:
         resolver = FrozenResolver(revision_map={}, n_releases=3)
         asof = date(2024, 6, 15)
