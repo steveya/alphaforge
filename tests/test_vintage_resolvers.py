@@ -14,7 +14,6 @@ from alphaforge.pit.resolvers import (
 )
 from alphaforge.pit.views import VintageView
 
-
 # ---------------------------------------------------------------------------
 # VintageView value object
 # ---------------------------------------------------------------------------

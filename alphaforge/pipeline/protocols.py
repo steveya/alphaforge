@@ -64,6 +64,8 @@ class Parametric(Protocol):
     Transformers and Signals may implement this. Filters do NOT.
     """
 
+    name: str
+
     def get_params(self) -> dict[str, float]: ...
     def set_params(self, params: dict[str, float]) -> None: ...
 

@@ -6,11 +6,8 @@ import pytest
 
 from alphaforge.pit.release_rules import (
     RULE_REGISTRY,
-    CalendarDay,
     CustomRule,
-    FixedLagMonths,
     NthBusinessDay,
-    NthWeekday,
     QuarterlyRelease,
     ReleaseRule,
     WeeklyRelease,

@@ -10,13 +10,11 @@ import pytest
 from alphaforge.pipeline.protocols import (
     Filter,
     Parametric,
-    Pipeline,
     PipelineVariant,
     Signal,
     SimplePipeline,
     Transformer,
 )
-
 
 # --- Stub implementations ---
 

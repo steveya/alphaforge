@@ -28,12 +28,12 @@ Downstream usage (nowcast-data)::
 from .metrics import (
     BENCHMARK_METRICS,
     DEFAULT_METRICS,
-    MAPE,
     MAE,
-    MeanError,
-    MetricFn,
+    MAPE,
     RMSE,
     DirectionalAccuracy,
+    MeanError,
+    MetricFn,
 )
 
 __all__ = [

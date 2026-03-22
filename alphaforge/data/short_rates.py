@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Any, Mapping
 
 import pandas as pd
 
@@ -105,7 +105,7 @@ def _fetch_fred_panel(
     ctx: DataContext,
     *,
     source: str,
-    series_map: Mapping[object, str],
+    series_map: Mapping[Any, str],
     start: pd.Timestamp,
     end: pd.Timestamp,
     sort_labels: bool = True,
