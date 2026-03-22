@@ -1,12 +1,5 @@
 from .accessor import PITAccessor, ensure_pit_table
 from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
-from .resolvers import (
-    FrozenResolver,
-    LatestResolver,
-    RealtimeResolver,
-    VintageResolver,
-)
-from .views import VintageView
 from .exceptions import (
     PITCausalityError,
     PITContractError,
@@ -49,6 +42,12 @@ from .pipelines import (
     coerce_pipeline_spec,
 )
 from .ref_entity import make_ref_entity_id, parse_ref_entity_id
+from .resolvers import (
+    FrozenResolver,
+    LatestResolver,
+    RealtimeResolver,
+    VintageResolver,
+)
 from .tasks import (
     build_snapshot_tape,
     first_vintage_snapshot,
@@ -67,6 +66,7 @@ from .tasks import (
 )
 from .transforms import PITTransformResult, PITTransformSpec
 from .validation import PITValidationReport, validate_pit_observations
+from .views import VintageView
 
 __all__ = [
     "PITAccessor",

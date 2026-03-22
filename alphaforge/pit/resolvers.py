@@ -14,7 +14,6 @@ from typing import Protocol, runtime_checkable
 
 from alphaforge.pit.views import VintageView
 
-
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------

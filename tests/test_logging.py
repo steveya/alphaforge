@@ -1,12 +1,9 @@
 """Tests for alphaforge.logging module."""
 from __future__ import annotations
 
-import json
 import logging
-import tempfile
 from pathlib import Path
 
-import structlog
 from structlog.testing import capture_logs
 
 from alphaforge.logging import configure_logging, get_logger

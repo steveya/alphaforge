@@ -28,12 +28,6 @@ _US_BD = CustomBusinessDay(calendar=USFederalHolidayCalendar())
 RULE_REGISTRY: dict[str, type] = {}
 
 
-def _register(cls: type) -> type:
-    """Decorator that adds a ReleaseRule subclass to the registry."""
-    RULE_REGISTRY[cls.rule_type] = cls
-    return cls
-
-
 # ---------------------------------------------------------------------------
 # Base
 # ---------------------------------------------------------------------------
@@ -83,6 +77,12 @@ class ReleaseRule(ABC):
                 f"Known types: {sorted(RULE_REGISTRY)}"
             )
         return cls(**kwargs)
+
+
+def _register(cls: type[ReleaseRule]) -> type[ReleaseRule]:
+    """Decorator that adds a ReleaseRule subclass to the registry."""
+    RULE_REGISTRY[cls.rule_type] = cls
+    return cls
 
 
 # ---------------------------------------------------------------------------

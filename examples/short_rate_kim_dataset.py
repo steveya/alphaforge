@@ -10,8 +10,8 @@ import pandas as pd
 from alphaforge import (
     DataContext,
     DuckDBParquetStore,
-    FREDDataSource,
     FRBTermStructureBenchmarkSource,
+    FREDDataSource,
     PhiladelphiaSPFMeanLevelSource,
     TradingCalendar,
     build_kim_orphanides_dataset,

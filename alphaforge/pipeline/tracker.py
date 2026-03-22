@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from alphaforge.pit.accessor import PITAccessor, to_utc_aware
+from alphaforge.pit.accessor import PITAccessor
 
 from .health import SourceHealthPolicy, SourceHealthStatus, assess_source_health
 
@@ -28,7 +28,6 @@ class SourceHealthTracker:
         return source_name.replace("_", ".")
 
     def _latest_obs_date(self, source_name: str) -> pd.Timestamp | None:
-        prefix = self._prefix(source_name)
         try:
             result = self.pit.conn.execute(
                 "SELECT MAX(obs_date) FROM pit_observations WHERE source = ?",

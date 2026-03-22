@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
-import pytest
 
 from alphaforge.pit.vintage import select_vintage_for_asof, validate_no_lookahead
 

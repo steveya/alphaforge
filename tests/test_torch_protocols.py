@@ -7,7 +7,7 @@ import pytest
 torch = pytest.importorskip("torch")
 nn = torch.nn
 
-from alphaforge.pipeline.torch_protocols import (
+from alphaforge.pipeline.torch_protocols import (  # noqa: E402
     DifferentiableSignalModule,
     NumpyDifferentiableWrapper,
     TorchParametric,
