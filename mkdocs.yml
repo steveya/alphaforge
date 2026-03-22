@@ -47,10 +47,17 @@ nav:
       - Development: guides/development.md
   - API:
       - Package: api/package.md
+      - Evaluation Metrics: api/evaluation-metrics.md
       - DataContext: api/data-context.md
       - Dataset Builder: api/dataset-builder.md
       - Dataset Spec: api/dataset-spec.md
       - PIT Accessor: api/pit-accessor.md
+      - PIT Release Rules: api/pit-release-rules.md
+      - PIT Vintage Views: api/pit-views.md
+      - PIT Vintage Resolvers: api/pit-resolvers.md
+      - PIT Panel Builder: api/pit-panel.md
+      - PIT Missingness: api/pit-missingness.md
+      - PIT Vintage Utilities: api/pit-vintage.md
       - PIT Transforms: api/pit-transforms.md
       - PIT Pipelines: api/pit-pipelines.md
       - PIT Models: api/pit-models.md

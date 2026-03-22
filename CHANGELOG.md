@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added PIT release rules (`alphaforge.pit.release_rules`): `NthBusinessDay`, `NthWeekday`, `CalendarDay`, `FixedLagMonths`, `QuarterlyRelease`, `WeeklyRelease`, and `CustomRule` with a tagged-union registry for YAML round-trips.
+- Added vintage resolvers (`alphaforge.pit.resolvers`): `RealtimeResolver`, `LatestResolver`, and `FrozenResolver` implementing the `VintageResolver` protocol for point-in-time backtesting views.
+- Added `VintageView` value object (`alphaforge.pit.views`) to declare realtime / latest / frozen vintage strategies without coupling to resolution logic.
+- Added PIT panel builder utilities (`alphaforge.pit.panel`): `build_pit_panel` and `long_to_wide` for assembling aligned panels from PIT snapshots.
+- Added missingness taxonomy (`alphaforge.pit.missingness`) for classifying NaN cells in nowcasting panels by cause.
+- Added vintage selection and lookahead validation utilities (`alphaforge.pit.vintage`): `select_vintage_for_asof` and `validate_no_lookahead`.
+- Fixed CI linting errors: removed unused imports and sorted import blocks across new modules and test files.
+- Fixed mypy type errors: tightened `_register` signature in `pit/release_rules.py`, added `name: str` to `Parametric` protocol in `pipeline/protocols.py`, and corrected `Mapping[Any, str]` annotation in `data/short_rates.py`.
+
+- Added `alphaforge.evaluation` package with pluggable metric infrastructure:
+  - `MetricFn` protocol (runtime-checkable) for composable forecast accuracy metrics.
+  - Built-in implementations: `RMSE`, `MAE`, `DirectionalAccuracy`, `MAPE`, `MeanError`.
+  - Pre-built suites: `DEFAULT_METRICS` (RMSE + MAE + DA), `BENCHMARK_METRICS` (adds MeanError + MAPE).
+  - API reference page: `docs/api/evaluation-metrics.md`.
 - Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
 - Fixed linting errors: sorted import blocks (ruff I001) in `alphaforge/__init__.py`, `alphaforge/pit/__init__.py`, `alphaforge/pit/accessor.py`, `alphaforge/pit/gdp.py`, `alphaforge/pit/tasks.py`; removed unused imports (ruff F401) in `alphaforge/data/public_web/cftc_cot.py`.
 - Fixed mypy type narrowing error in `iter_walk_forward_folds` (`pit/tasks.py`): replaced `int(min_train_size)` with a direct reference guarded by a type-narrowing assertion.

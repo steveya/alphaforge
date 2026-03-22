@@ -4,13 +4,6 @@ from .data.context import DataContext
 from .data.fred_source import FREDDataSource
 from .data.panel import PanelFrame
 from .data.pit_source import PITDataSource
-from .data.short_rates import (
-    ShortRateDataset,
-    build_duan_weekly_dataset,
-    build_kim_orphanides_dataset,
-    build_macro_finance_dataset,
-    build_policy_rule_dataset,
-)
 from .data.public_web import (
     ANPFuelPricesDataSource,
     B3HistoricalQuotesDataSource,
@@ -35,6 +28,13 @@ from .data.public_web import (
 )
 from .data.query import Query
 from .data.schema import TableSchema
+from .data.short_rates import (
+    ShortRateDataset,
+    build_duan_weekly_dataset,
+    build_kim_orphanides_dataset,
+    build_macro_finance_dataset,
+    build_policy_rule_dataset,
+)
 from .data.universe import EntityMetadata, Universe
 from .features.frame import Artifact, FeatureFrame
 from .features.ops import join_feature_frames, materialize
@@ -92,6 +92,7 @@ from .pit.tasks import (
 )
 from .pit.transforms import PITTransformResult, PITTransformSpec
 from .pit.validation import PITValidationReport, validate_pit_observations
+from .registry import EntityEntry, EntityRegistry
 from .store.cache import MaterializationPolicy
 from .store.duckdb_parquet import DuckDBParquetStore
 from .time.align import AlignedPanel, AlignSpec, AvailabilityState, align_panel
@@ -206,4 +207,6 @@ __all__ = [
     "build_snapshot_tape",
     "make_ref_entity_id",
     "parse_ref_entity_id",
+    "EntityEntry",
+    "EntityRegistry",
 ]
