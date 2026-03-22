@@ -2,13 +2,6 @@ from .accessor import PITAccessor, ensure_pit_table
 from .adapters import PITAdapter
 from .catalog import SeriesCatalog
 from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
-from .observation import (
-    PITMode,
-    PITObservation,
-    SeriesMetadata,
-    create_pit_dataframe,
-    create_wide_view,
-)
 from .exceptions import (
     PITAdapterError,
     PITCausalityError,
@@ -48,6 +41,13 @@ from .models import (
     coerce_pit_tape_spec,
     coerce_snapshot_series_spec,
 )
+from .observation import (
+    PITMode,
+    PITObservation,
+    SeriesMetadata,
+    create_pit_dataframe,
+    create_wide_view,
+)
 from .pipelines import (
     PITPipelineResult,
     PITPipelineSpec,
@@ -60,6 +60,18 @@ from .resolvers import (
     LatestResolver,
     RealtimeResolver,
     VintageResolver,
+)
+from .target import (
+    TargetPolicy,
+    get_quarterly_release_observation_stream,
+    list_quarterly_target_releases_asof,
+    list_quarterly_target_releases_asof_multi,
+    quarter_end_date,
+    quarter_obs_date,
+    quarter_start_date,
+    resolve_quarterly_final_target,
+    resolve_target_from_releases,
+    resolve_target_obs_date_anchor,
 )
 from .tasks import (
     build_snapshot_tape,
@@ -158,4 +170,14 @@ __all__ = [
     "RealtimeResolver",
     "LatestResolver",
     "FrozenResolver",
+    "TargetPolicy",
+    "quarter_end_date",
+    "quarter_start_date",
+    "quarter_obs_date",
+    "resolve_target_obs_date_anchor",
+    "list_quarterly_target_releases_asof",
+    "list_quarterly_target_releases_asof_multi",
+    "resolve_target_from_releases",
+    "resolve_quarterly_final_target",
+    "get_quarterly_release_observation_stream",
 ]

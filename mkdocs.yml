@@ -66,6 +66,7 @@ nav:
       - PIT Validation: api/pit-validation.md
       - PIT Guards: api/pit-guards.md
       - PIT Tasks: api/pit-tasks.md
+      - PIT Target Policy: api/pit-target.md
       - PIT Data Source: api/pit-source.md
       - Stores: api/stores.md
       - Public Web: api/public-web.md
