@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added `alphaforge.evaluation` package with pluggable metric infrastructure:
+  - `MetricFn` protocol (runtime-checkable) for composable forecast accuracy metrics.
+  - Built-in implementations: `RMSE`, `MAE`, `DirectionalAccuracy`, `MAPE`, `MeanError`.
+  - Pre-built suites: `DEFAULT_METRICS` (RMSE + MAE + DA), `BENCHMARK_METRICS` (adds MeanError + MAPE).
+  - API reference page: `docs/api/evaluation-metrics.md`.
 - Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
 - Fixed linting errors: sorted import blocks (ruff I001) in `alphaforge/__init__.py`, `alphaforge/pit/__init__.py`, `alphaforge/pit/accessor.py`, `alphaforge/pit/gdp.py`, `alphaforge/pit/tasks.py`; removed unused imports (ruff F401) in `alphaforge/data/public_web/cftc_cot.py`.
 - Fixed mypy type narrowing error in `iter_walk_forward_folds` (`pit/tasks.py`): replaced `int(min_train_size)` with a direct reference guarded by a type-narrowing assertion.

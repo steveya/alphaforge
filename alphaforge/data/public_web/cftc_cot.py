@@ -116,6 +116,24 @@ _CONTRACT_CODES: dict[str, str] = {
     "13874A": "sp500_e_mini",
     "33874E": "sp500_micro",
     "209742": "vix",  # VIX futures (alternative code)
+    # G10 FX futures (CME)
+    "099741": "eur",  # Euro FX
+    "096742": "gbp",  # British Pound
+    "097741": "jpy",  # Japanese Yen
+    "092741": "chf",  # Swiss Franc
+    "090741": "cad",  # Canadian Dollar
+    "232741": "aud",  # Australian Dollar
+    "112741": "nzd",  # New Zealand Dollar
+    "095741": "mxn",  # Mexican Peso (not G10 but heavily traded)
+    "089741": "sek",  # Swedish Krona
+    "088741": "nok",  # Norwegian Krone
+    # US rates futures
+    "13874P": "sofr_3m",  # Three-Month SOFR (CME)
+    "134741": "ust_10y",  # 10-Year T-Note
+    "020601": "ust_30y",  # T-Bond (30Y)
+    "044601": "ust_5y",  # 5-Year T-Note
+    "042601": "ust_2y",  # 2-Year T-Note
+    "043602": "fed_funds",  # 30-Day Federal Funds
 }
 
 # Regex fallbacks for market-name-based contract detection.
@@ -123,6 +141,15 @@ _MARKET_NAME_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bVIX\b", re.IGNORECASE), "vix"),
     (re.compile(r"\bCBOE VOLATILITY INDEX\b", re.IGNORECASE), "vix"),
     (re.compile(r"\bS&P 500\b", re.IGNORECASE), "sp500"),
+    (re.compile(r"\bEURO FX\b", re.IGNORECASE), "eur"),
+    (re.compile(r"\bBRITISH POUND\b", re.IGNORECASE), "gbp"),
+    (re.compile(r"\bJAPANESE YEN\b", re.IGNORECASE), "jpy"),
+    (re.compile(r"\bSWISS FRANC\b", re.IGNORECASE), "chf"),
+    (re.compile(r"\bCANADIAN DOLLAR\b", re.IGNORECASE), "cad"),
+    (re.compile(r"\bAUSTRALIAN DOLLAR\b", re.IGNORECASE), "aud"),
+    (re.compile(r"\bNEW ZEALAND DOLLAR\b|\bNZ DOLLAR\b", re.IGNORECASE), "nzd"),
+    (re.compile(r"\bSOFR\b", re.IGNORECASE), "sofr_3m"),
+    (re.compile(r"\b10.YEAR\b.*\bT.NOTE\b", re.IGNORECASE), "ust_10y"),
 ]
 
 

@@ -74,6 +74,7 @@ from .pit.pipelines import (
     coerce_pipeline_spec,
 )
 from .pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
+from .registry import EntityEntry, EntityRegistry
 from .pit.tasks import (
     build_snapshot_tape,
     first_vintage_snapshot,
@@ -206,4 +207,6 @@ __all__ = [
     "build_snapshot_tape",
     "make_ref_entity_id",
     "parse_ref_entity_id",
+    "EntityEntry",
+    "EntityRegistry",
 ]

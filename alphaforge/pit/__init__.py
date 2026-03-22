@@ -1,5 +1,12 @@
 from .accessor import PITAccessor, ensure_pit_table
 from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
+from .resolvers import (
+    FrozenResolver,
+    LatestResolver,
+    RealtimeResolver,
+    VintageResolver,
+)
+from .views import VintageView
 from .exceptions import (
     PITCausalityError,
     PITContractError,
@@ -122,4 +129,9 @@ __all__ = [
     "build_snapshot_tape",
     "make_ref_entity_id",
     "parse_ref_entity_id",
+    "VintageView",
+    "VintageResolver",
+    "RealtimeResolver",
+    "LatestResolver",
+    "FrozenResolver",
 ]

@@ -19,6 +19,7 @@ dependencies = [
     "pyarrow>=14.0.1",
     "fredapi>=0.5.2",
     "PyYAML>=6.0.1",
+    "structlog>=24.0",
 ]
 
 [project.optional-dependencies]

@@ -47,6 +47,7 @@ nav:
       - Development: guides/development.md
   - API:
       - Package: api/package.md
+      - Evaluation Metrics: api/evaluation-metrics.md
       - DataContext: api/data-context.md
       - Dataset Builder: api/dataset-builder.md
       - Dataset Spec: api/dataset-spec.md
