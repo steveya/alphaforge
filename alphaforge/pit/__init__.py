@@ -1,14 +1,27 @@
 from .accessor import PITAccessor, ensure_pit_table
+from .adapters import PITAdapter
+from .catalog import SeriesCatalog
 from .contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
+from .observation import (
+    PITMode,
+    PITObservation,
+    SeriesMetadata,
+    create_pit_dataframe,
+    create_wide_view,
+)
 from .exceptions import (
+    PITAdapterError,
     PITCausalityError,
     PITContractError,
     PITEngineError,
     PITError,
     PITExperimentalFeatureError,
+    PITNotSupportedError,
     PITUnsupportedOperationError,
     PITValidationError,
     PITValidationWarning,
+    SourceFetchError,
+    VintageNotFoundError,
 )
 from .gdp import (
     GDPC1_QOQ_SAAR_RF_REL_GRAPH_ID,
@@ -79,6 +92,17 @@ __all__ = [
     "PITCausalityError",
     "PITEngineError",
     "PITValidationWarning",
+    "PITAdapterError",
+    "PITNotSupportedError",
+    "VintageNotFoundError",
+    "SourceFetchError",
+    "PITMode",
+    "PITObservation",
+    "SeriesMetadata",
+    "create_pit_dataframe",
+    "create_wide_view",
+    "PITAdapter",
+    "SeriesCatalog",
     "PITTransformSpec",
     "PITTransformResult",
     "PITPipelineStep",

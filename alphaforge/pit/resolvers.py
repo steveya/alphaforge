@@ -152,5 +152,9 @@ class FrozenResolver:
         vintages = self._revision_map.get((series_key, obs_date))
         if vintages is None:
             return requested_asof  # no revision history → fall through
-        idx = min(self._n, len(vintages)) - 1  # 0-indexed
-        return vintages[idx]
+        # Filter to vintages on or before requested_asof to prevent lookahead.
+        valid = [v for v in vintages if v <= requested_asof]
+        if not valid:
+            return requested_asof
+        idx = min(self._n, len(valid)) - 1  # 0-indexed
+        return valid[idx]
