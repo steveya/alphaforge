@@ -53,11 +53,13 @@ class TargetPolicy:
 
 def _quarter_end_from_string(ref_quarter: str) -> date:
     """Parse ``YYYYQn`` and return the calendar quarter-end date."""
-    match = re.match(r"^(\d{4})[Qq]([1-4])$", str(ref_quarter).strip())
+    match = re.match(r"^(\d{4})[Qq](\d+)$", str(ref_quarter).strip())
     if not match:
         raise ValueError(f"Expected quarterly reference in format YYYYQn, got {ref_quarter!r}")
     year = int(match.group(1))
     quarter = int(match.group(2))
+    if quarter not in {1, 2, 3, 4}:
+        raise ValueError(f"Invalid quarter: {quarter}. Must be 1, 2, 3, or 4")
     month = quarter * 3
     # Calendar quarter-end day
     if month in {3, 12}:
