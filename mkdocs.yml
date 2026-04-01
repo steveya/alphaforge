@@ -41,6 +41,7 @@ nav:
   - Guides:
       - Dataset Spec: guides/dataset-spec.md
       - Data Sources: guides/data-sources.md
+      - First Rate Futures: guides/first-rate-futures.md
       - PIT Data: guides/pit.md
       - PIT API Contract: guides/pit-api-contract.md
       - PIT Migrations: guides/pit-migrations.md
@@ -68,6 +69,7 @@ nav:
       - PIT Tasks: api/pit-tasks.md
       - PIT Target Policy: api/pit-target.md
       - PIT Data Source: api/pit-source.md
+      - First Rate Futures: api/first-rate-futures.md
       - Stores: api/stores.md
       - Public Web: api/public-web.md
   - Changelog: changelog.md

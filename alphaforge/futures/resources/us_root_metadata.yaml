@@ -1,0 +1,69 @@
+defaults:
+  timezone: America/New_York
+  session_open_local: "18:00"
+  session_close_local: "17:00"
+  price_scale: 1.0
+
+roots:
+  ES: { venue: CME }
+  NQ: { venue: CME }
+  RTY: { venue: CME }
+  YM: { venue: CBOT }
+  MES: { venue: CME }
+  MNQ: { venue: CME }
+  M2K: { venue: CME }
+  VX: { venue: CFE }
+  VXM: { venue: CFE }
+  CL: { venue: NYMEX }
+  MCL: { venue: NYMEX }
+  NG: { venue: NYMEX }
+  QG: { venue: NYMEX }
+  RB: { venue: NYMEX }
+  HO: { venue: NYMEX }
+  GC: { venue: COMEX }
+  SI: { venue: COMEX }
+  HG: { venue: COMEX }
+  ZN: { venue: CBOT }
+  ZT: { venue: CBOT }
+  ZF: { venue: CBOT }
+  ZB: { venue: CBOT }
+  UB: { venue: CBOT }
+  ZQ: { venue: CBOT }
+  SOFR: { venue: CME }
+  SR1: { venue: CME }
+  SR3: { venue: CME }
+  ZC: { venue: CBOT }
+  ZS: { venue: CBOT }
+  ZM: { venue: CBOT }
+  ZL: { venue: CBOT }
+  ZW: { venue: CBOT }
+  KE: { venue: CBOT }
+  ZO: { venue: CBOT }
+  HE: { venue: CME }
+  LE: { venue: CME }
+  GF: { venue: CME }
+  BTC: { venue: CME }
+  MBT: { venue: CME }
+  ETH: { venue: CME }
+  MET: { venue: CME }
+  6A: { venue: CME }
+  A6: { venue: CME }
+  AD: { venue: CME }
+  6B: { venue: CME }
+  B6: { venue: CME }
+  6C: { venue: CME }
+  C6: { venue: CME }
+  6E: { venue: CME }
+  E6: { venue: CME }
+  6J: { venue: CME }
+  J6: { venue: CME }
+  6M: { venue: CME }
+  MP: { venue: CME }
+  6N: { venue: CME }
+  N6: { venue: CME }
+  6S: { venue: CME }
+  S6: { venue: CME }
+
+patterns:
+  - regex: "^[A-Z0-9]{1,5}$"
+    venue: US_FUTURES_GENERIC

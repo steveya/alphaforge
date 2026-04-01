@@ -40,6 +40,15 @@ from .features.frame import Artifact, FeatureFrame
 from .features.ops import join_feature_frames, materialize
 from .features.realization import FeatureRealization, FitState
 from .features.template import FeatureTemplate, ParamSpec, SliceSpec
+from .futures import (
+    FirstRateFuturesAdapter,
+    FirstRateFuturesArtifacts,
+    FirstRateFuturesConfig,
+    FirstRateFuturesLoader,
+    FirstRateFuturesRootMetadata,
+    build_first_rate_futures_context,
+    load_first_rate_futures_metadata,
+)
 from .pit.accessor import PITAccessor
 from .pit.contract import PIT_CONTRACT_VERSION, PITContractVersion, get_pit_contract_version
 from .pit.exceptions import (
@@ -108,6 +117,13 @@ __all__ = [
     "PanelFrame",
     "PITDataSource",
     "ShortRateDataset",
+    "FirstRateFuturesAdapter",
+    "FirstRateFuturesArtifacts",
+    "FirstRateFuturesConfig",
+    "FirstRateFuturesLoader",
+    "FirstRateFuturesRootMetadata",
+    "build_first_rate_futures_context",
+    "load_first_rate_futures_metadata",
     "BLSDataSource",
     "BEADataSource",
     "EIADataSource",

@@ -19,6 +19,7 @@ Alphaforge provides composable primitives for point-in-time feature engineering 
 
 - [Dataset Spec guide](guides/dataset-spec.md)
 - [Data sources guide](guides/data-sources.md)
+- [First Rate futures guide](guides/first-rate-futures.md)
 - [PIT guide](guides/pit.md)
 - [Development guide](guides/development.md)
 

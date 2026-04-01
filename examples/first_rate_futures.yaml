@@ -1,0 +1,4 @@
+source_dir: /path/to/fut_contract_price_5m
+artifact_root: /path/to/alphaforge_futures_store
+metadata_path: /path/to/custom_us_root_metadata.yaml
+roll_min_consecutive_sessions: 2
