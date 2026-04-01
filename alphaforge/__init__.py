@@ -41,11 +41,14 @@ from .features.ops import join_feature_frames, materialize
 from .features.realization import FeatureRealization, FitState
 from .features.template import FeatureTemplate, ParamSpec, SliceSpec
 from .futures import (
+    FirstRateBarsAdapter,
+    FirstRateBarsConfig,
     FirstRateFuturesAdapter,
     FirstRateFuturesArtifacts,
     FirstRateFuturesConfig,
     FirstRateFuturesLoader,
     FirstRateFuturesRootMetadata,
+    build_first_rate_bars_context,
     build_first_rate_futures_context,
     load_first_rate_futures_metadata,
 )
@@ -117,11 +120,14 @@ __all__ = [
     "PanelFrame",
     "PITDataSource",
     "ShortRateDataset",
+    "FirstRateBarsAdapter",
+    "FirstRateBarsConfig",
     "FirstRateFuturesAdapter",
     "FirstRateFuturesArtifacts",
     "FirstRateFuturesConfig",
     "FirstRateFuturesLoader",
     "FirstRateFuturesRootMetadata",
+    "build_first_rate_bars_context",
     "build_first_rate_futures_context",
     "load_first_rate_futures_metadata",
     "BLSDataSource",
