@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added unified data layer with `SourceAdapter` protocol, `SourceAdapterBase` mixin, `FetchResult`/`CacheManifest` value types, and `CacheLayer` (DuckDB-backed PIT/market cache).
+- Added built-in source adapters: `TiingoAdapter` (market OHLCV), `FREDSourceAdapter` (macro PIT), `CFTCAdapter` (CoT positioning), `DTCCAdapter` (swap derivatives).
+- Added `alphaforge.source_adapters` entry-point group and `discover_adapters()` for plugin-style adapter registration.
+- Added `SourceAdapterPITCompat` bridge allowing unified `SourceAdapter` instances to be used through the legacy `PITAdapter` interface.
+- Extended `DataContext` with `adapters`, `default_sources`, `fetch()`, `fetch_many()`, `prefetch()` while remaining backward compatible.
+- Moved PIT transforms from positioning into `alphaforge.data.transforms` (`cot_pit`, `dtcc_pit`, `utils`).
 - Added PIT release rules (`alphaforge.pit.release_rules`): `NthBusinessDay`, `NthWeekday`, `CalendarDay`, `FixedLagMonths`, `QuarterlyRelease`, `WeeklyRelease`, and `CustomRule` with a tagged-union registry for YAML round-trips.
 - Added vintage resolvers (`alphaforge.pit.resolvers`): `RealtimeResolver`, `LatestResolver`, and `FrozenResolver` implementing the `VintageResolver` protocol for point-in-time backtesting views.
 - Added `VintageView` value object (`alphaforge.pit.views`) to declare realtime / latest / frozen vintage strategies without coupling to resolution logic.

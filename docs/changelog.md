@@ -4,6 +4,12 @@ This page mirrors release notes from [`CHANGELOG.md`](https://github.com/steveya
 
 ## Unreleased
 
+- Added unified data layer with `SourceAdapter` protocol, `SourceAdapterBase` mixin, `FetchResult`/`CacheManifest` value types, and `CacheLayer` (DuckDB-backed PIT/market cache).
+- Added built-in source adapters: `TiingoAdapter` (market OHLCV), `FREDSourceAdapter` (macro PIT), `CFTCAdapter` (CoT positioning), `DTCCAdapter` (swap derivatives).
+- Added `alphaforge.source_adapters` entry-point group and `discover_adapters()` for plugin-style adapter registration.
+- Added `SourceAdapterPITCompat` bridge allowing unified `SourceAdapter` instances to be used through the legacy `PITAdapter` interface.
+- Extended `DataContext` with `adapters`, `default_sources`, `fetch()`, `fetch_many()`, `prefetch()` — fully backward compatible.
+- Moved PIT transforms from positioning into `alphaforge.data.transforms` (`cot_pit`, `dtcc_pit`, `utils`).
 - Fixed type annotation errors in `pit/accessor.py` and `pit/models.py` (stale `type: ignore` comments, TypedDict narrowing, and `ast.Call` attribute access error codes).
 - Added PIT contract version API (`PIT_CONTRACT_VERSION`, `get_pit_contract_version`) and migration guide support.
 - Added ingestion policy modes for PIT upserts: `strict=\"error|warn|coerce\"` (`bool` remains backward compatible).

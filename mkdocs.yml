@@ -50,6 +50,8 @@ nav:
       - Package: api/package.md
       - Evaluation Metrics: api/evaluation-metrics.md
       - DataContext: api/data-context.md
+      - Source Adapters: api/source-adapters.md
+      - Data Transforms: api/transforms.md
       - Dataset Builder: api/dataset-builder.md
       - Dataset Spec: api/dataset-spec.md
       - PIT Accessor: api/pit-accessor.md

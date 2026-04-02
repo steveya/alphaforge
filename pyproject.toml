@@ -43,6 +43,12 @@ docs = [
     "griffe>=1.5",
 ]
 
+[project.entry-points."alphaforge.source_adapters"]
+tiingo = "alphaforge.data.sources.tiingo:TiingoAdapter"
+fred = "alphaforge.data.sources.fred:FREDSourceAdapter"
+cftc = "alphaforge.data.sources.cftc:CFTCAdapter"
+dtcc = "alphaforge.data.sources.dtcc:DTCCAdapter"
+
 [project.urls]
 Homepage = "https://github.com/steveya/alphaforge"
 Documentation = "https://alphaforge.readthedocs.io/en/latest/"
