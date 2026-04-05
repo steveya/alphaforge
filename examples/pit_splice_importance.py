@@ -20,7 +20,6 @@ from alphaforge.features.frame import FeatureFrame
 from alphaforge.features.template import SliceSpec
 from alphaforge.pit import PITAccessor
 from alphaforge.pit.transforms import PITTransformSpec
-from alphaforge.store.duckdb_parquet import DuckDBParquetStore
 from alphaforge.time.calendar import TradingCalendar
 
 
@@ -87,8 +86,7 @@ def run_example(root: str | Path) -> dict[str, Any]:
     root_path = Path(root)
     root_path.mkdir(parents=True, exist_ok=True)
 
-    store = DuckDBParquetStore(root=str(root_path))
-    pit = PITAccessor(store.conn())
+    pit = PITAccessor.open(root_path)
     pit.upsert_pit_observations(
         pd.DataFrame(
             {

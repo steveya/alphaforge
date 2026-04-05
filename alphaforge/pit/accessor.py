@@ -6,13 +6,14 @@ import json
 import uuid
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
 import duckdb
 import pandas as pd
 from pandas.tseries.offsets import MonthEnd
 
-from alphaforge.time.ref_period import RefFreq, RefPeriod
+from alphaforge.time.ref_period import ObsDateAnchor, RefFreq, RefPeriod, coerce_ref_period
 
 from .exceptions import (
     PITCausalityError,
@@ -39,6 +40,13 @@ from .pipelines import (
     PITPipelineSpec,
     coerce_pipeline_spec,
 )
+from .queries import (
+    RefRevisionQuery,
+    RefSnapshotQuery,
+    coerce_ref_revision_query,
+    coerce_ref_snapshot_query,
+)
+from .ref_entity import make_ref_entity_id
 from .transforms import (
     EngineMismatchPolicy,
     PITEngineResolution,
@@ -519,6 +527,14 @@ def _evaluate_expression_series(
 class PITAccessor:
     conn: duckdb.DuckDBPyConnection
 
+    @classmethod
+    def open(cls, root: str | Path) -> "PITAccessor":
+        """Open a PIT accessor from a DuckDBParquetStore root."""
+        from alphaforge.store.duckdb_parquet import DuckDBParquetStore
+
+        store = DuckDBParquetStore(root=str(root))
+        return cls(store.conn())
+
     def __post_init__(self) -> None:
         ensure_pit_table(self.conn)
 
@@ -654,6 +670,7 @@ class PITAccessor:
                 {
                     "series_key": pd.Series(dtype="object"),
                     "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
                     "value": pd.Series(dtype="float64"),
                 }
             )
@@ -673,11 +690,12 @@ class PITAccessor:
 
         where_clause = " AND ".join(filters)
         query = f"""
-            SELECT series_key, obs_date, value
+            SELECT series_key, obs_date, source_asof_utc, value
             FROM (
                 SELECT
                     series_key,
                     obs_date,
+                    asof_utc AS source_asof_utc,
                     value,
                     ROW_NUMBER() OVER (
                         PARTITION BY series_key, obs_date
@@ -695,12 +713,14 @@ class PITAccessor:
                 {
                     "series_key": pd.Series(dtype="object"),
                     "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                    "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
                     "value": pd.Series(dtype="float64"),
                 }
             )
 
         out = df.copy()
         out["obs_date"] = to_utc_aware(out["obs_date"])
+        out["source_asof_utc"] = to_utc_aware(out["source_asof_utc"])
         out["value"] = pd.to_numeric(out["value"], errors="coerce")
         return out.reset_index(drop=True)
 
@@ -928,16 +948,15 @@ class PITAccessor:
     def get_revision_timeline_ref(
         self,
         series_key: str,
-        ref: str | RefPeriod,
+        ref: object,
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
         *,
         freq: RefFreq | None = None,
+        obs_date_anchor: ObsDateAnchor | str = "end",
     ) -> pd.Series:
-        ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
-        if freq is not None and freq != ref_period.freq:
-            raise PITContractError("Reference period frequency does not match requested freq.")
-        obs_date = ref_period.end_obs_date()
+        ref_period = self._resolve_ref_period(ref, freq=freq, obs_date_anchor=obs_date_anchor)
+        obs_date = ref_period.obs_date(anchor=obs_date_anchor)
         return self.get_revision_timeline(
             series_key,
             obs_date,
@@ -949,37 +968,103 @@ class PITAccessor:
         self,
         series_key: str,
         asof: pd.Timestamp,
-        start_ref: str | RefPeriod | None = None,
-        end_ref: str | RefPeriod | None = None,
+        start_ref: object | None = None,
+        end_ref: object | None = None,
         *,
         freq: RefFreq | None = None,
+        obs_date_anchor: ObsDateAnchor | str = "end",
     ) -> pd.Series:
         def _resolve(ref_value: str | RefPeriod | None) -> pd.Timestamp | None:
             if ref_value is None:
                 return None
-            if isinstance(ref_value, RefPeriod):
-                ref_period = ref_value
-            else:
-                ref_period = RefPeriod.parse(ref_value)
-            if freq is not None and ref_period.freq != freq:
-                raise PITContractError("Reference period frequency does not match requested freq.")
-            return ref_period.end_obs_date()
+            return self._resolve_ref_period(
+                ref_value,
+                freq=freq,
+                obs_date_anchor=obs_date_anchor,
+            ).obs_date(anchor=obs_date_anchor)
 
         start_ts = _resolve(start_ref)
         end_ts = _resolve(end_ref)
         return self.get_snapshot(series_key, asof, start=start_ts, end=end_ts)
 
     @staticmethod
-    def _resolve_ref_period(ref: str | RefPeriod, freq: RefFreq | None = None) -> RefPeriod:
-        ref_period = RefPeriod.parse(ref) if isinstance(ref, str) else ref
-        if freq is not None and freq != ref_period.freq:
-            raise PITContractError("Reference period frequency does not match requested freq.")
-        return ref_period
+    def _resolve_ref_period(
+        ref: object,
+        freq: RefFreq | None = None,
+        obs_date_anchor: ObsDateAnchor | str = "end",
+    ) -> RefPeriod:
+        try:
+            return coerce_ref_period(ref, freq=freq, obs_date_anchor=obs_date_anchor)
+        except ValueError as exc:
+            raise PITContractError(str(exc)) from exc
+
+    def snapshot_ref(
+        self,
+        query: RefSnapshotQuery | Mapping[str, Any],
+    ) -> pd.Series:
+        query_obj = coerce_ref_snapshot_query(query)
+        obs_date_anchor = str(query_obj.obs_date_anchor)
+        snap = self.get_snapshot_ref(
+            query_obj.series_key,
+            query_obj.asof,
+            start_ref=query_obj.start_ref,
+            end_ref=query_obj.end_ref,
+            freq=query_obj.freq,
+            obs_date_anchor=obs_date_anchor,
+        )
+        if snap.empty:
+            return pd.Series(
+                index=pd.Index([], dtype="object", name="ref_period"),
+                dtype="float64",
+                name=query_obj.series_key,
+            )
+
+        ref_index = [
+            self._resolve_ref_period(
+                obs_date,
+                freq=query_obj.freq,
+                obs_date_anchor=obs_date_anchor,
+            )
+            for obs_date in snap.index
+        ]
+        if len(ref_index) != len(set(ref_index)):
+            raise PITContractError(
+                "Ref snapshot query produced duplicate reference periods. "
+                "Check the requested frequency and obs_date_anchor."
+            )
+
+        out = pd.Series(
+            snap.to_numpy(),
+            index=pd.Index(ref_index, name="ref_period"),
+            name=query_obj.series_key,
+        )
+        out.attrs["freq"] = query_obj.freq
+        out.attrs["obs_date_anchor"] = obs_date_anchor
+        return out
+
+    def revisions_ref(
+        self,
+        query: RefRevisionQuery | Mapping[str, Any],
+    ) -> pd.Series:
+        query_obj = coerce_ref_revision_query(query)
+        obs_date_anchor = str(query_obj.obs_date_anchor)
+        series = self.get_revision_timeline_ref(
+            query_obj.series_key,
+            query_obj.ref,
+            start_asof=query_obj.start_asof,
+            end_asof=query_obj.end_asof,
+            freq=query_obj.freq,
+            obs_date_anchor=obs_date_anchor,
+        )
+        series.name = make_ref_entity_id(query_obj.series_key, query_obj.ref)
+        series.attrs["ref_period"] = query_obj.ref
+        series.attrs["obs_date_anchor"] = obs_date_anchor
+        return series
 
     def list_release_stream(
         self,
         series_key: str,
-        ref: str | RefPeriod,
+        ref: object,
         asof: pd.Timestamp | None = None,
         *,
         freq: RefFreq | None = None,
@@ -1039,7 +1124,7 @@ class PITAccessor:
     def resolve_release(
         self,
         series_key: str,
-        ref: str | RefPeriod,
+        ref: object,
         *,
         policy: ReleaseSelectionPolicy | Mapping[str, Any] | str = "latest",
         asof: pd.Timestamp | None = None,
@@ -1223,6 +1308,131 @@ class PITAccessor:
             raise PITContractError("align must be one of {'month_end', 'quarter_end'}.")
         return pd.DatetimeIndex(aligned).tz_localize("UTC")
 
+    @staticmethod
+    def _empty_snapshot_panel_long() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "series_key": pd.Series(dtype="object"),
+                "series_alias": pd.Series(dtype="object"),
+                "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                "source_obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                "value": pd.Series(dtype="float64"),
+            }
+        )
+
+    def _snapshot_bounds_from_spec(
+        self,
+        spec: SnapshotSeriesSpec,
+    ) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+        anchor = str(spec.obs_date_anchor)
+
+        def _resolve(ref_value: object | None) -> pd.Timestamp | None:
+            if ref_value is None:
+                return None
+            return self._resolve_ref_period(
+                ref_value,
+                freq=spec.freq,
+                obs_date_anchor=anchor,
+            ).obs_date(anchor=anchor)
+
+        return _resolve(spec.start_ref), _resolve(spec.end_ref)
+
+    def _snapshot_panel_rows_from_frame(
+        self,
+        spec: SnapshotSeriesSpec,
+        frame: pd.DataFrame,
+        *,
+        align: Literal["month_end", "quarter_end"],
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return self._empty_snapshot_panel_long()
+
+        rows = frame.copy()
+        rows["source_obs_date"] = to_utc_aware(rows["source_obs_date"])
+        rows["source_asof_utc"] = to_utc_aware(rows["source_asof_utc"])
+        rows["value"] = pd.to_numeric(rows["value"], errors="coerce")
+        rows["obs_date"] = self._align_snapshot_index(
+            pd.DatetimeIndex(rows["source_obs_date"]),
+            align=align,
+        )
+        rows["series_key"] = spec.series_key
+        rows["series_alias"] = spec.alias or spec.series_key
+        rows = rows.loc[
+            :, ["series_key", "series_alias", "obs_date", "source_obs_date", "source_asof_utc", "value"]
+        ]
+        rows = rows.sort_values(["series_key", "obs_date", "source_obs_date", "source_asof_utc"])
+        rows = rows.drop_duplicates(subset=["series_key", "obs_date"], keep="last")
+        return rows.reset_index(drop=True)
+
+    def build_snapshot_panel_long(
+        self,
+        series_specs: Sequence[SnapshotSeriesSpec | Mapping[str, Any]],
+        asof: pd.Timestamp,
+        *,
+        align: Literal["month_end", "quarter_end"] = "month_end",
+    ) -> pd.DataFrame:
+        normalized_specs = [coerce_snapshot_series_spec(raw_spec) for raw_spec in series_specs]
+        if not normalized_specs:
+            return self._empty_snapshot_panel_long()
+
+        aliases = [spec.alias or spec.series_key for spec in normalized_specs]
+        if len(set(aliases)) != len(aliases):
+            raise PITContractError("Snapshot panel aliases must be unique.")
+
+        latest_batches: dict[
+            tuple[pd.Timestamp | None, pd.Timestamp | None],
+            list[SnapshotSeriesSpec],
+        ] = {}
+        pieces: list[pd.DataFrame] = []
+
+        for spec in normalized_specs:
+            start_obs, end_obs = self._snapshot_bounds_from_spec(spec)
+            mode, _ = normalize_release_selection_policy(spec.release_policy)
+            if mode == "latest":
+                latest_batches.setdefault((start_obs, end_obs), []).append(spec)
+                continue
+
+            rows = self._snapshot_rows_with_release_policy(
+                spec.series_key,
+                asof=asof,
+                policy=spec.release_policy,
+                start=start_obs,
+                end=end_obs,
+            ).rename(columns={"obs_date": "source_obs_date"})
+            pieces.append(
+                self._snapshot_panel_rows_from_frame(
+                    spec,
+                    rows,
+                    align=align,
+                )
+            )
+
+        for (start_obs, end_obs), specs in latest_batches.items():
+            batch = self.get_snapshot_multi(
+                [spec.series_key for spec in specs],
+                asof=asof,
+                start=start_obs,
+                end=end_obs,
+            ).rename(columns={"obs_date": "source_obs_date"})
+            for spec in specs:
+                spec_rows = batch.loc[batch["series_key"] == spec.series_key].copy()
+                pieces.append(
+                    self._snapshot_panel_rows_from_frame(
+                        spec,
+                        spec_rows,
+                        align=align,
+                    )
+                )
+
+        if not pieces:
+            return self._empty_snapshot_panel_long()
+
+        out = pd.concat(pieces, ignore_index=True)
+        if out.empty:
+            return self._empty_snapshot_panel_long()
+        return out.sort_values(["obs_date", "series_alias"]).reset_index(drop=True)
+
     def build_snapshot_panel(
         self,
         series_specs: Sequence[SnapshotSeriesSpec | Mapping[str, Any]],
@@ -1233,53 +1443,30 @@ class PITAccessor:
     ) -> pd.DataFrame:
         if join not in {"inner", "left", "right", "outer"}:
             raise PITContractError("join must be one of {'inner', 'left', 'right', 'outer'}.")
-
-        panel: pd.DataFrame | None = None
-        for raw_spec in series_specs:
-            spec = coerce_snapshot_series_spec(raw_spec)
-            start_obs = (
-                RefPeriod.parse(spec.start_ref).end_obs_date()
-                if spec.start_ref is not None
-                else None
-            )
-            end_obs = (
-                RefPeriod.parse(spec.end_ref).end_obs_date() if spec.end_ref is not None else None
-            )
-
-            snapshot = self._snapshot_with_release_policy(
-                spec.series_key,
-                asof=asof,
-                policy=spec.release_policy,
-                start=start_obs,
-                end=end_obs,
-            )
-            if snapshot.empty:
-                s = pd.Series(dtype="float64", name=spec.alias or spec.series_key)
-            else:
-                aligned_index = self._align_snapshot_index(
-                    pd.DatetimeIndex(snapshot.index),
-                    align=align,
-                )
-                tmp = pd.DataFrame(
-                    {
-                        "source_obs_date": pd.DatetimeIndex(snapshot.index),
-                        "obs_date": aligned_index,
-                        "value": snapshot.to_numpy(),
-                    }
-                )
-                tmp = tmp.sort_values(["obs_date", "source_obs_date"])
-                tmp = tmp.drop_duplicates(subset=["obs_date"], keep="last")
-                s = pd.Series(
-                    tmp["value"].to_numpy(),
-                    index=pd.DatetimeIndex(tmp["obs_date"]),
-                    name=spec.alias or spec.series_key,
-                ).sort_index()
-
-            frame = s.to_frame()
-            panel = frame if panel is None else panel.join(frame, how=join)
-
-        if panel is None:
+        normalized_specs = [coerce_snapshot_series_spec(raw_spec) for raw_spec in series_specs]
+        if not normalized_specs:
             return pd.DataFrame()
+        aliases = [spec.alias or spec.series_key for spec in normalized_specs]
+
+        long_panel = self.build_snapshot_panel_long(
+            normalized_specs,
+            asof=asof,
+            align=align,
+        )
+        if long_panel.empty:
+            return pd.DataFrame(index=pd.DatetimeIndex([], name="obs_date"), columns=aliases)
+
+        panel = (
+            long_panel.pivot(index="obs_date", columns="series_alias", values="value")
+            .sort_index()
+            .reindex(columns=aliases)
+        )
+        if join == "inner":
+            panel = panel.dropna(how="any")
+        elif join == "left":
+            panel = panel.loc[panel[aliases[0]].notna()]
+        elif join == "right":
+            panel = panel.loc[panel[aliases[-1]].notna()]
 
         panel.index = (
             panel.index.tz_convert("UTC")
@@ -1287,7 +1474,7 @@ class PITAccessor:
             else panel.index.tz_localize("UTC")
         )
         panel.index.name = "obs_date"
-        return panel.sort_index()
+        return panel
 
     def _list_candidate_asofs(
         self,
@@ -3332,6 +3519,255 @@ class PITAccessor:
             return df
         df["created_utc"] = to_utc_aware(df["created_utc"])
         return df
+
+    @staticmethod
+    def _empty_series_lineage() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "series_key": pd.Series(dtype="object"),
+                "obs_date": pd.Series(dtype="datetime64[ns, UTC]"),
+                "asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                "value": pd.Series(dtype="float64"),
+                "source": pd.Series(dtype="object"),
+                "meta_json": pd.Series(dtype="object"),
+                "lineage_kind": pd.Series(dtype="object"),
+                "transform_id": pd.Series(dtype="object"),
+                "graph_id": pd.Series(dtype="object"),
+                "node_name": pd.Series(dtype="object"),
+                "op": pd.Series(dtype="object"),
+                "axis": pd.Series(dtype="object"),
+                "engine": pd.Series(dtype="object"),
+                "engine_requested": pd.Series(dtype="object"),
+                "experimental": pd.Series(dtype="bool"),
+                "input_series_keys": pd.Series(dtype="object"),
+                "source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                "selected_input_series_key": pd.Series(dtype="object"),
+                "selected_input_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                "source_asof_by_series_utc": pd.Series(dtype="object"),
+                "max_source_asof_utc": pd.Series(dtype="datetime64[ns, UTC]"),
+                "causality_status": pd.Series(dtype="object"),
+            }
+        )
+
+    @staticmethod
+    def _parse_lineage_payload(meta_json: object) -> dict[str, Any]:
+        if meta_json is None or pd.isna(meta_json):
+            return {}
+        try:
+            payload = json.loads(str(meta_json))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _parse_lineage_timestamp(value: object) -> pd.Timestamp | None:
+        if value is None:
+            return None
+        try:
+            return to_utc_aware(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_lineage_timestamp_map(self, value: object) -> dict[str, pd.Timestamp]:
+        if not isinstance(value, Mapping):
+            return {}
+        out: dict[str, pd.Timestamp] = {}
+        for key, raw in value.items():
+            parsed = self._parse_lineage_timestamp(raw)
+            if parsed is not None:
+                out[str(key)] = parsed
+        return out
+
+    @staticmethod
+    def _lineage_kind(payload: Mapping[str, Any]) -> str:
+        if "transform_id" in payload:
+            return "transform"
+        if "graph_id" in payload:
+            return "expression_graph"
+        if payload:
+            return "derived"
+        return "raw"
+
+    def get_series_lineage(
+        self,
+        series_key: str,
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        limit: int | None = 500,
+    ) -> pd.DataFrame:
+        filters = ["series_key = ?"]
+        params: list[object] = [series_key]
+        if start_obs is not None:
+            filters.append("obs_date >= ?")
+            params.append(to_utc_naive(start_obs))
+        if end_obs is not None:
+            filters.append("obs_date <= ?")
+            params.append(to_utc_naive(end_obs))
+        if start_asof is not None:
+            filters.append("asof_utc >= ?")
+            params.append(to_utc_naive(start_asof))
+        if end_asof is not None:
+            filters.append("asof_utc <= ?")
+            params.append(to_utc_naive(end_asof))
+
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT series_key, obs_date, asof_utc, value, source, meta_json
+            FROM {_PIT_TABLE}
+            WHERE {where_clause}
+            ORDER BY obs_date ASC, asof_utc ASC
+        """
+        if limit is not None:
+            if limit <= 0:
+                raise PITContractError("get_series_lineage limit must be > 0 when provided.")
+            query += " LIMIT ?"
+            params.append(int(limit))
+
+        df = self.conn.execute(query, params).fetchdf()
+        if df.empty:
+            return self._empty_series_lineage()
+
+        df["obs_date"] = to_utc_aware(df["obs_date"])
+        df["asof_utc"] = to_utc_aware(df["asof_utc"])
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+
+        records: list[dict[str, Any]] = []
+        for row in df.itertuples(index=False):
+            payload = self._parse_lineage_payload(row.meta_json)
+            lineage_kind = self._lineage_kind(payload)
+            input_series_keys = payload.get("input_series_keys")
+            if not isinstance(input_series_keys, list):
+                input_key = payload.get("input_series_key")
+                input_series_keys = [input_key] if input_key is not None else []
+            input_series_keys = tuple(str(key) for key in input_series_keys if str(key).strip())
+
+            source_asof = self._parse_lineage_timestamp(payload.get("source_asof_utc"))
+            selected_input_asof = self._parse_lineage_timestamp(
+                payload.get("selected_input_asof_utc")
+            )
+            source_asof_by_series = self._parse_lineage_timestamp_map(
+                payload.get("source_asof_by_series_utc")
+            )
+            max_candidates = [
+                ts
+                for ts in [source_asof, selected_input_asof, *source_asof_by_series.values()]
+                if ts is not None
+            ]
+            max_source_asof = max(max_candidates) if max_candidates else None
+
+            if lineage_kind == "raw":
+                causality_status = "raw"
+            elif max_source_asof is None:
+                causality_status = "unknown"
+            elif max_source_asof > pd.Timestamp(row.asof_utc):
+                causality_status = "violation"
+            elif bool(payload.get("experimental")):
+                causality_status = "experimental"
+            else:
+                causality_status = "ok"
+
+            records.append(
+                {
+                    "series_key": row.series_key,
+                    "obs_date": pd.Timestamp(row.obs_date),
+                    "asof_utc": pd.Timestamp(row.asof_utc),
+                    "value": row.value,
+                    "source": row.source,
+                    "meta_json": row.meta_json,
+                    "lineage_kind": lineage_kind,
+                    "transform_id": payload.get("transform_id"),
+                    "graph_id": payload.get("graph_id"),
+                    "node_name": payload.get("node_name"),
+                    "op": payload.get("op"),
+                    "axis": payload.get("axis"),
+                    "engine": payload.get("engine"),
+                    "engine_requested": payload.get("engine_requested"),
+                    "experimental": bool(payload.get("experimental", False)),
+                    "input_series_keys": input_series_keys,
+                    "source_asof_utc": source_asof,
+                    "selected_input_series_key": payload.get("selected_input_series_key"),
+                    "selected_input_asof_utc": selected_input_asof,
+                    "source_asof_by_series_utc": source_asof_by_series,
+                    "max_source_asof_utc": max_source_asof,
+                    "causality_status": causality_status,
+                }
+            )
+
+        return pd.DataFrame(records)
+
+    def explain_series(
+        self,
+        series_key: str,
+        start_obs: pd.Timestamp | None = None,
+        end_obs: pd.Timestamp | None = None,
+        start_asof: pd.Timestamp | None = None,
+        end_asof: pd.Timestamp | None = None,
+        *,
+        limit: int | None = 500,
+    ) -> dict[str, Any]:
+        lineage = self.get_series_lineage(
+            series_key,
+            start_obs=start_obs,
+            end_obs=end_obs,
+            start_asof=start_asof,
+            end_asof=end_asof,
+            limit=limit,
+        )
+        if lineage.empty:
+            return {
+                "series_key": series_key,
+                "row_count": 0,
+                "derived_row_count": 0,
+                "lineage_kinds": [],
+                "input_series_keys": [],
+                "transform_ids": [],
+                "graph_ids": [],
+                "causality_status_counts": {},
+                "causality_safe": True,
+            }
+
+        derived = lineage[lineage["lineage_kind"] != "raw"]
+        input_series_keys = sorted(
+            {
+                key
+                for keys in lineage["input_series_keys"]
+                for key in (keys if isinstance(keys, tuple) else tuple())
+            }
+        )
+        transform_ids = sorted(
+            {str(value) for value in lineage["transform_id"].dropna().tolist() if str(value).strip()}
+        )
+        graph_ids = sorted(
+            {str(value) for value in lineage["graph_id"].dropna().tolist() if str(value).strip()}
+        )
+        status_counts = {
+            str(key): int(value)
+            for key, value in lineage["causality_status"].value_counts(dropna=False).items()
+        }
+        causality_safe = (
+            status_counts.get("violation", 0) == 0
+            and status_counts.get("unknown", 0) == 0
+            and status_counts.get("experimental", 0) == 0
+        )
+
+        return {
+            "series_key": series_key,
+            "row_count": int(len(lineage)),
+            "derived_row_count": int(len(derived)),
+            "lineage_kinds": sorted({str(value) for value in lineage["lineage_kind"].tolist()}),
+            "input_series_keys": input_series_keys,
+            "transform_ids": transform_ids,
+            "graph_ids": graph_ids,
+            "causality_status_counts": status_counts,
+            "causality_safe": causality_safe,
+            "latest_output_asof_utc": lineage["asof_utc"].max(),
+            "latest_source_asof_utc": lineage["max_source_asof_utc"].dropna().max()
+            if lineage["max_source_asof_utc"].notna().any()
+            else None,
+        }
 
     def list_pipelines(self, pipeline_id: str | None = None) -> pd.DataFrame:
         query = f"""

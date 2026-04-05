@@ -7,13 +7,13 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
-from .utils import apply_query_filters, make_entity_id, project_columns
+from .base import PublicWebSourceBase
+from .schema_helpers import single_value_schema
+from .utils import make_entity_id
 
 
-class BLSDataSource(DataSource):
+class BLSDataSource(PublicWebSourceBase):
     name = "bls"
     TABLE = "bls_series"
 
@@ -25,19 +25,16 @@ class BLSDataSource(DataSource):
         chunk_size: int = 25,
         response_provider=None,
     ) -> None:
+        super().__init__()
         self._api_key = api_key or os.getenv("BLS_API_KEY")
         self._api_url = api_url
         self._chunk_size = chunk_size
         self._response_provider = response_provider
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
-                required_columns=["value"],
-                canonical_columns=["value"],
-                entity_column="entity_id",
-                time_column="date",
+            self.TABLE: single_value_schema(
+                self.TABLE,
                 native_freq="M",
                 time_semantics="point",
             )
@@ -75,11 +72,13 @@ class BLSDataSource(DataSource):
         ) + pd.offsets.MonthEnd(0)
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
-        entities = list(q.entities or [])
-        if not entities:
-            raise ValueError("BLSDataSource requires q.entities with BLS series ids")
+        self._require_table(q)
+        schema = self._schema()
+        entities = self._require_entities(
+            q,
+            error_message="BLSDataSource requires q.entities with BLS series ids",
+        )
+        asof_utc = self._asof_utc(q)
 
         start_year = (
             q.start.year
@@ -105,21 +104,9 @@ class BLSDataSource(DataSource):
                             "date": date,
                             "entity_id": make_entity_id(sid),
                             "value": pd.to_numeric(point.get("value"), errors="coerce"),
-                            "asof_utc": q.asof or pd.Timestamp.now(tz="UTC"),
+                            "asof_utc": asof_utc,
                         }
                     )
 
-        out = pd.DataFrame(rows)
-        if out.empty:
-            return pd.DataFrame(columns=["date", "entity_id", "asof_utc", "value"])
-
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        schema = self.schemas()[self.TABLE]
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col="date",
-            entity_col="entity_id",
-        )
-        return out.sort_values(["entity_id", "date"]).reset_index(drop=True)
+        out = self._frame_from_records(rows, schema=schema)
+        return self._finalize(out, q=q, schema=schema)

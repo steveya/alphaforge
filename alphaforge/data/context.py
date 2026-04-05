@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import TYPE_CHECKING, Mapping, Optional
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 import pandas as pd
 
@@ -27,20 +27,23 @@ class DataContext:
     Parameters
     ----------
     sources : Mapping[str, DataSource]
-        Legacy data source mapping (backward compatibility).
+        Legacy data source mapping kept for backward compatibility and
+        raw-loader workflows.
     calendars : Mapping[str, TradingCalendar]
         Trading calendar lookup.
     store : Store
         Backing store for persistence.
     adapters : dict[str, SourceAdapter] | None
-        Unified source adapters keyed by source_name (e.g. ``"cftc"``).
+        Canonical public data-loading surface keyed by source_name
+        (e.g. ``"cftc"``).
     default_sources : dict[str, str] | None
-        Maps dataset → default source_name (e.g. ``{"cot.tff": "cftc"}``).
+        Maps dataset → default source_name for canonical adapter routing
+        (e.g. ``{"cot.tff": "cftc"}``).
     """
 
     sources: Mapping[str, DataSource]
     calendars: Mapping[str, TradingCalendar]
-    store: Store
+    store: Store | None
     universe: Optional[Universe] = None
     entity_meta: Optional[EntityMetadata] = None
     adapters: Optional[dict[str, "SourceAdapter"]] = field(default=None)
@@ -51,6 +54,47 @@ class DataContext:
     _dataset_to_sources: dict[str, list[str]] = field(
         init=False, default_factory=dict, repr=False
     )
+
+    @classmethod
+    def from_adapters(
+        cls,
+        *adapters: "SourceAdapter",
+        calendars: Mapping[str, TradingCalendar] | None = None,
+        store: Store | None = None,
+        universe: Optional[Universe] = None,
+        entity_meta: Optional[EntityMetadata] = None,
+        default_sources: Optional[dict[str, str]] = None,
+    ) -> "DataContext":
+        """Build a DataContext from adapters without manual mapping boilerplate."""
+        adapter_map: dict[str, "SourceAdapter"] = {}
+        dataset_to_sources: dict[str, list[str]] = {}
+
+        for adapter in adapters:
+            if adapter.source_name in adapter_map:
+                raise ValueError(
+                    f"Duplicate adapter source_name: {adapter.source_name!r}"
+                )
+            adapter_map[adapter.source_name] = adapter
+            for dataset in adapter.datasets:
+                dataset_to_sources.setdefault(dataset, []).append(adapter.source_name)
+
+        derived_defaults = {
+            dataset: sources[0]
+            for dataset, sources in dataset_to_sources.items()
+            if len(sources) == 1
+        }
+        merged_defaults = dict(derived_defaults)
+        merged_defaults.update(default_sources or {})
+
+        return cls(
+            sources={},
+            calendars=dict(calendars or {}),
+            store=store,
+            universe=universe,
+            entity_meta=entity_meta,
+            adapters=adapter_map,
+            default_sources=merged_defaults or None,
+        )
 
     def __post_init__(self) -> None:
         if isinstance(self.store, DuckDBParquetStore):
@@ -63,6 +107,7 @@ class DataContext:
                     self._dataset_to_sources.setdefault(ds, []).append(source_name)
 
     def fetch_panel(self, source: str, q: Query) -> PanelFrame:
+        """Legacy panel-building path for DataSource-backed loaders."""
         df = self.sources[source].fetch(q)
 
         try:
@@ -145,12 +190,29 @@ class DataContext:
         # Use default_sources mapping
         if self.default_sources and dataset in self.default_sources:
             default_src = self.default_sources[dataset]
-            if default_src in self.adapters:
-                return self.adapters[default_src]
+            if default_src not in self.adapters:
+                raise KeyError(
+                    f"Default source '{default_src}' for dataset '{dataset}' is not "
+                    f"registered. Available: {sorted(self.adapters.keys())}"
+                )
+            adapter = self.adapters[default_src]
+            if dataset not in adapter.datasets:
+                raise KeyError(
+                    f"Default source '{default_src}' does not serve dataset "
+                    f"'{dataset}'. It serves: {sorted(adapter.datasets)}"
+                )
+            return adapter
 
         # Fallback: find any adapter that serves this dataset
         if dataset in self._dataset_to_sources:
-            src_name = self._dataset_to_sources[dataset][0]
+            source_names = self._dataset_to_sources[dataset]
+            if len(source_names) > 1:
+                raise KeyError(
+                    f"Multiple adapters serve dataset '{dataset}': "
+                    f"{sorted(source_names)}. Configure default_sources or "
+                    "pass source= explicitly."
+                )
+            src_name = source_names[0]
             return self.adapters[src_name]
 
         raise KeyError(
@@ -165,9 +227,41 @@ class DataContext:
         source: Optional[str] = None,
         max_staleness: Optional[timedelta] = None,
     ) -> "FetchResult":
-        """Unified fetch: resolve adapter and delegate."""
+        """Canonical fetch path: resolve an adapter and delegate."""
         adapter = self._resolve_source(query.table, source)
         return adapter.fetch(query, max_staleness=max_staleness)
+
+    def load(
+        self,
+        dataset: str,
+        *,
+        columns: Sequence[str],
+        start: Optional[pd.Timestamp | str] = None,
+        end: Optional[pd.Timestamp | str] = None,
+        entities: Optional[Sequence[str]] = None,
+        asof: Optional[pd.Timestamp | str] = None,
+        vintage: str = "latest",
+        vintage_id: Optional[str] = None,
+        grid: Optional[str] = None,
+        source: Optional[str] = None,
+        max_staleness: Optional[timedelta] = None,
+    ) -> "FetchResult":
+        """Happy-path source load without explicit Query construction."""
+        return self.fetch(
+            Query(
+                table=dataset,
+                columns=list(columns),
+                start=start,
+                end=end,
+                entities=list(entities) if entities is not None else None,
+                asof=asof,
+                vintage=vintage,
+                vintage_id=vintage_id,
+                grid=grid,
+            ),
+            source=source,
+            max_staleness=max_staleness,
+        )
 
     def fetch_many(
         self,
@@ -176,12 +270,36 @@ class DataContext:
         source: Optional[str] = None,
         max_staleness: Optional[timedelta] = None,
     ) -> list["FetchResult"]:
-        """Fetch multiple queries, routing each to the correct adapter."""
-        results = []
-        for q in queries:
-            adapter = self._resolve_source(q.table, source)
-            results.append(adapter.fetch(q, max_staleness=max_staleness))
-        return results
+        """Canonical batch fetch path, grouped by resolved adapter."""
+        if not queries:
+            return []
+
+        grouped_queries: dict[int, tuple["SourceAdapter", list[tuple[int, Query]]]] = {}
+        for idx, query in enumerate(queries):
+            adapter = self._resolve_source(query.table, source)
+            adapter_key = id(adapter)
+            if adapter_key not in grouped_queries:
+                grouped_queries[adapter_key] = (adapter, [])
+            grouped_queries[adapter_key][1].append((idx, query))
+
+        results: list[Optional["FetchResult"]] = [None] * len(queries)
+        for adapter, indexed_queries in grouped_queries.values():
+            batch_queries = [query for _, query in indexed_queries]
+            batch_results = adapter.fetch_many(
+                batch_queries,
+                max_staleness=max_staleness,
+            )
+            if len(batch_results) != len(batch_queries):
+                raise ValueError(
+                    f"Adapter '{adapter.source_name}' returned {len(batch_results)} "
+                    f"results for {len(batch_queries)} queries."
+                )
+            for (idx, _), result in zip(indexed_queries, batch_results):
+                results[idx] = result
+
+        if any(result is None for result in results):
+            raise ValueError("fetch_many() did not populate every requested result.")
+        return [result for result in results if result is not None]
 
     def prefetch(
         self,

@@ -1,28 +1,29 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from urllib.parse import urljoin
 
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .archive import (
+    discover_archive_fetches,
+    plan_archive_fetches,
+    read_first_zip_member,
+)
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
 from .parsing import parse_csv_bytes, parse_xlsx_bytes
+from .schema_helpers import table_schema
 from .utils import (
-    apply_query_filters,
     ensure_date_utc,
     first_existing,
     make_entity_id,
-    project_columns,
     to_float,
 )
 
 
-class CFTCWeeklySwapsSource(DataSource):
+class CFTCWeeklySwapsSource(PublicWebSourceBase):
     name: str = "cftc_swaps_weekly"
     TABLE = "cftc.swaps.weekly"
     ARCHIVE_URL = "https://www.cftc.gov/MarketReports/SwapsReports/Archive/index.htm"
@@ -35,14 +36,14 @@ class CFTCWeeklySwapsSource(DataSource):
         archive_url: str | None = None,
         file_urls: list[str] | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._archive_url = archive_url or self.ARCHIVE_URL
         self._file_urls = file_urls
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["value"],
                 canonical_columns=[
                     "value",
@@ -52,16 +53,18 @@ class CFTCWeeklySwapsSource(DataSource):
                     "maturity_bucket",
                     "participant_type",
                 ],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="W",
                 time_semantics="interval_end",
             )
         }
 
-    def _discover_file_urls(self) -> list[str]:
+    def _discover_file_urls(self, q: Query):
         if self._file_urls:
-            return self._file_urls
+            return plan_archive_fetches(
+                self._file_urls,
+                years=None,
+                fallback_artifact_prefix="cftc_swaps_weekly",
+            )
 
         payload = self._http.get_bytes(
             url=self._archive_url,
@@ -69,20 +72,35 @@ class CFTCWeeklySwapsSource(DataSource):
             artifact_name="archive_index.html",
         )
         html = payload.decode(errors="ignore")
-        hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
-        files: list[str] = []
-        for href in hrefs:
-            if href.lower().endswith((".xlsx", ".xls", ".csv")):
-                files.append(urljoin(self._archive_url, href))
-        return sorted(set(files))
-
-    def _read_file(self, url: str) -> pd.DataFrame:
-        ext = url.lower().split("?")[0]
-        payload = self._http.get_bytes(
-            url=url,
-            source="cftc_swaps_weekly",
-            artifact_name=Path(ext).name or "weekly_file",
+        years: set[int] = set()
+        if q.start is not None:
+            years.add(q.start.year)
+        if q.end is not None:
+            years.add(q.end.year)
+        return discover_archive_fetches(
+            html,
+            base_url=self._archive_url,
+            suffixes=(".xlsx", ".xls", ".csv", ".zip"),
+            years=years,
+            fallback_artifact_prefix="cftc_swaps_weekly",
         )
+
+    def _read_file(self, planned) -> pd.DataFrame:
+        ext = planned.url.lower().split("?", 1)[0]
+        payload = self._http.get_bytes(
+            url=planned.url,
+            source="cftc_swaps_weekly",
+            artifact_name=planned.artifact_name,
+        )
+        if ext.endswith(".zip"):
+            member = read_first_zip_member(payload, suffixes=(".csv", ".xlsx", ".xls"))
+            if member is None:
+                return pd.DataFrame()
+            member_name, member_payload = member
+            member_ext = member_name.lower()
+            if member_ext.endswith(".csv"):
+                return parse_csv_bytes(member_payload)
+            return parse_xlsx_bytes(member_payload)
         if ext.endswith(".csv"):
             return parse_csv_bytes(payload)
         return parse_xlsx_bytes(payload)
@@ -154,34 +172,18 @@ class CFTCWeeklySwapsSource(DataSource):
         return out
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
         frames: list[pd.DataFrame] = []
-        for url in self._discover_file_urls():
-            parsed = self._read_file(url)
-            long_df = self._to_long(parsed, Path(url).name)
+        for planned in self._discover_file_urls(q):
+            parsed = self._read_file(planned)
+            long_df = self._to_long(parsed, planned.artifact_name)
             if not long_df.empty:
                 frames.append(long_df)
 
-        schema = self.schemas()[self.TABLE]
+        schema = self._schema()
         if not frames:
-            return pd.DataFrame(
-                columns=[
-                    schema.time_column,
-                    schema.entity_column,
-                    "asof_utc",
-                    *schema.required_columns,
-                ]
-            )
+            return self._empty_frame(schema)
 
         out = pd.concat(frames, ignore_index=True)
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
-        )
-        return out.reset_index(drop=True)
+        return self._finalize(out, q=q, schema=schema, sort_by=[])

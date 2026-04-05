@@ -7,7 +7,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alphaforge.data.public_web.cftc_cot import CFTCCoTSource, _publication_date
+from alphaforge.data.public_web.cftc_cot import (
+    CFTCCoTSource,
+    CFTCDisaggregatedCoTSource,
+    _publication_date,
+)
 from alphaforge.data.query import Query
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures/public_web/cftc_cot"
@@ -21,6 +25,13 @@ def _csv_to_zip_bytes(csv_path: Path) -> bytes:
     return buf.getvalue()
 
 
+def _csv_text_to_zip_bytes(filename: str, csv_text: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(filename, csv_text)
+    return buf.getvalue()
+
+
 class _MockHttpClient:
     """Return pre-built ZIP bytes for any URL request."""
 
@@ -31,7 +42,17 @@ class _MockHttpClient:
         return self._payload
 
 
-def _make_source() -> CFTCCoTSource:
+class _SequenceHttpClient:
+    """Return a per-URL payload so tests can model partial archive failures."""
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self._payloads = payloads
+
+    def get_bytes(self, *, url: str, source: str, artifact_name: str, **kw) -> bytes:
+        return self._payloads[url]
+
+
+def _make_tff_source() -> CFTCCoTSource:
     csv_path = _FIXTURE_DIR / "sample.csv"
     zip_bytes = _csv_to_zip_bytes(csv_path)
     http = _MockHttpClient(zip_bytes)
@@ -41,9 +62,43 @@ def _make_source() -> CFTCCoTSource:
     )
 
 
+def _make_disagg_source() -> CFTCDisaggregatedCoTSource:
+    csv_path = _FIXTURE_DIR / "sample_disagg.csv"
+    zip_bytes = _csv_to_zip_bytes(csv_path)
+    http = _MockHttpClient(zip_bytes)
+    return CFTCDisaggregatedCoTSource(
+        http_client=http,
+        file_urls=["file:///dummy.zip"],
+    )
+
+
+def _make_tff_legacy_header_source() -> CFTCCoTSource:
+    csv_path = _FIXTURE_DIR / "sample.csv"
+    csv_text = csv_path.read_text()
+    csv_text = csv_text.replace(
+        "Report_Date_as_YYYY-MM-DD",
+        "Report_Date_as_MM_DD_YYYY",
+    )
+    zip_bytes = _csv_text_to_zip_bytes("legacy_tff.csv", csv_text)
+    http = _MockHttpClient(zip_bytes)
+    return CFTCCoTSource(http_client=http, file_urls=["file:///dummy.zip"])
+
+
+def _make_disagg_legacy_header_source() -> CFTCDisaggregatedCoTSource:
+    csv_path = _FIXTURE_DIR / "sample_disagg.csv"
+    csv_text = csv_path.read_text()
+    csv_text = csv_text.replace(
+        "Report_Date_as_YYYY-MM-DD",
+        "Report_Date_as_MM_DD_YYYY",
+    )
+    zip_bytes = _csv_text_to_zip_bytes("legacy_disagg.csv", csv_text)
+    http = _MockHttpClient(zip_bytes)
+    return CFTCDisaggregatedCoTSource(http_client=http, file_urls=["file:///dummy.zip"])
+
+
 class TestCFTCCoTSource:
     def test_schemas(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         schemas = source.schemas()
         assert "cftc.cot.tff" in schemas
         schema = schemas["cftc.cot.tff"]
@@ -53,7 +108,7 @@ class TestCFTCCoTSource:
         assert "short_positions" in schema.required_columns
 
     def test_fetch_returns_rows(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -72,7 +127,7 @@ class TestCFTCCoTSource:
         }.issubset(df.columns)
 
     def test_entity_id_format(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -93,7 +148,7 @@ class TestCFTCCoTSource:
             assert parts[-1] == "cftc"
 
     def test_entity_filter(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -107,7 +162,7 @@ class TestCFTCCoTSource:
         assert df["entity_id"].eq("futures.vix.lev_money.cftc").all()
 
     def test_time_filter(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         # Only the first VIX row has report_date 2026-01-06 → pub_date 2026-01-09
         df = source.fetch(
             Query(
@@ -126,7 +181,7 @@ class TestCFTCCoTSource:
         assert all(d <= pd.Timestamp("2026-01-12") for d in dates)
 
     def test_date_column_is_utc(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -139,7 +194,7 @@ class TestCFTCCoTSource:
 
     def test_publication_date_is_friday(self) -> None:
         """Publication date should always be a Friday (3 bdays after Tuesday report)."""
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -157,7 +212,7 @@ class TestCFTCCoTSource:
         ).all(), f"Expected all Fridays, got day_of_week={day_of_week.unique()}"
 
     def test_all_trader_categories(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         df = source.fetch(
             Query(
                 table="cftc.cot.tff",
@@ -178,8 +233,30 @@ class TestCFTCCoTSource:
         assert "futures.vix.asset_mgr.cftc" in entities
         assert "futures.vix.other_rept.cftc" in entities
 
+    def test_legacy_report_date_header_is_parsed(self) -> None:
+        source = _make_tff_legacy_header_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.tff",
+                columns=["long_positions"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+                entities=["futures.vix.lev_money.cftc"],
+            )
+        )
+        assert not df.empty
+        assert pd.Timestamp(df["date"].iloc[0]) == pd.Timestamp("2026-01-09", tz="UTC")
+
+    def test_year_urls_use_historical_batch_before_2010(self) -> None:
+        source = CFTCCoTSource(file_urls=None)
+        assert source._year_urls(2008, 2018) == [
+            "https://www.cftc.gov/files/dea/history/fin_fut_txt_2006_2016.zip",
+            "https://www.cftc.gov/files/dea/history/fut_fin_txt_2017.zip",
+            "https://www.cftc.gov/files/dea/history/fut_fin_txt_2018.zip",
+        ]
+
     def test_unknown_table_raises(self) -> None:
-        source = _make_source()
+        source = _make_tff_source()
         with pytest.raises(ValueError, match="Unknown table"):
             source.fetch(
                 Query(
@@ -189,6 +266,125 @@ class TestCFTCCoTSource:
                     end=pd.Timestamp("2026-02-01", tz="UTC"),
                 )
             )
+
+    def test_archive_failures_raise_instead_of_silently_skipping_years(self) -> None:
+        csv_path = _FIXTURE_DIR / "sample.csv"
+        good_zip = _csv_to_zip_bytes(csv_path)
+        source = CFTCCoTSource(
+            http_client=_SequenceHttpClient(
+                {
+                    "file:///broken_2025.zip": b"not-a-zip",
+                    "file:///good_2026.zip": good_zip,
+                }
+            ),
+            file_urls=["file:///broken_2025.zip", "file:///good_2026.zip"],
+        )
+
+        with pytest.raises(RuntimeError, match="file:///broken_2025.zip"):
+            source.fetch(
+                Query(
+                    table="cftc.cot.tff",
+                    columns=["long_positions"],
+                    start=pd.Timestamp("2025-01-01", tz="UTC"),
+                    end=pd.Timestamp("2026-02-01", tz="UTC"),
+                )
+            )
+
+
+class TestCFTCDisaggregatedCoTSource:
+    def test_schemas(self) -> None:
+        source = _make_disagg_source()
+        schemas = source.schemas()
+        assert "cftc.cot.disagg" in schemas
+        schema = schemas["cftc.cot.disagg"]
+        assert schema.native_freq == "W"
+        assert schema.time_semantics == "interval_end"
+        assert "long_positions" in schema.required_columns
+        assert "short_positions" in schema.required_columns
+
+    def test_fetch_returns_rows(self) -> None:
+        source = _make_disagg_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.disagg",
+                columns=["long_positions", "short_positions"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+            )
+        )
+        assert not df.empty
+        assert {
+            "date",
+            "entity_id",
+            "asof_utc",
+            "long_positions",
+            "short_positions",
+        }.issubset(df.columns)
+
+    def test_entity_ids_use_commodity_contract_codes(self) -> None:
+        source = _make_disagg_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.disagg",
+                columns=["long_positions", "short_positions"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+            )
+        )
+        entities = set(df["entity_id"].unique())
+        assert "futures.wheat_srw.prod_merc.cftc" in entities
+        assert "futures.gold.swap.cftc" in entities
+
+    def test_entity_filter(self) -> None:
+        source = _make_disagg_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.disagg",
+                columns=["long_positions", "short_positions"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+                entities=["futures.wheat_srw.m_money.cftc"],
+            )
+        )
+        assert not df.empty
+        assert df["entity_id"].eq("futures.wheat_srw.m_money.cftc").all()
+
+    def test_missing_spread_columns_are_nan(self) -> None:
+        source = _make_disagg_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.disagg",
+                columns=["spread_positions", "trader_category"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+                entities=["futures.wheat_srw.prod_merc.cftc"],
+            )
+        )
+        assert not df.empty
+        assert df["trader_category"].eq("prod_merc").all()
+        assert df["spread_positions"].isna().all()
+
+    def test_legacy_report_date_header_is_parsed(self) -> None:
+        source = _make_disagg_legacy_header_source()
+        df = source.fetch(
+            Query(
+                table="cftc.cot.disagg",
+                columns=["long_positions"],
+                start=pd.Timestamp("2026-01-01", tz="UTC"),
+                end=pd.Timestamp("2026-02-01", tz="UTC"),
+                entities=["futures.wheat_srw.prod_merc.cftc"],
+            )
+        )
+        assert not df.empty
+        assert pd.Timestamp(df["date"].iloc[0]) == pd.Timestamp("2026-01-09", tz="UTC")
+
+    def test_year_urls_use_historical_batch_before_2010(self) -> None:
+        source = CFTCDisaggregatedCoTSource(file_urls=None)
+        assert source._year_urls(2008, 2018) == [
+            "https://www.cftc.gov/files/dea/history/fut_disagg_txt_hist_2006_2016.zip",
+            "https://www.cftc.gov/files/dea/history/fut_disagg_txt_2017.zip",
+            "https://www.cftc.gov/files/dea/history/fut_disagg_txt_2018.zip",
+        ]
 
 
 class TestPublicationDate:

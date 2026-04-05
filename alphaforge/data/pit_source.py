@@ -15,7 +15,7 @@ from alphaforge.pit.guards import ReleaseLagPolicy, effective_asof
 
 @dataclass
 class PITDataSource(DataSource):
-    """Expose PIT snapshots/observations through the DataSource contract."""
+    """Expose PIT rows through the legacy/raw-loader DataSource contract."""
 
     pit: PITAccessor
     lag_policy: ReleaseLagPolicy | None = None

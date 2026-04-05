@@ -106,6 +106,25 @@ def _materialize_template(
     return template.transform(ctx, params, slice, state)
 
 
+def _annotate_feature_frame_request(ff: FeatureFrame, req) -> FeatureFrame:
+    """Stamp request-level composition metadata into the feature catalog."""
+    if ff.catalog is None or ff.catalog.empty:
+        return ff
+
+    catalog = ff.catalog.copy()
+    if req.key is not None:
+        catalog["request_key"] = req.key
+
+    template_name = getattr(req.template, "name", req.template.__class__.__name__)
+    catalog["template_name"] = template_name
+    template_version = getattr(req.template, "version", None)
+    if template_version is not None:
+        catalog["template_version"] = template_version
+
+    ff.catalog = catalog
+    return ff
+
+
 def _materialize_target(
     ctx,
     target: TargetRequest,
@@ -228,9 +247,10 @@ def build_dataset(
 
     # 1) materialize features
     feature_frames: List[FeatureFrame] = []
-    for req in spec.features:
+    for req in spec.feature_requests():
         s = _apply_override(base_slice, req.slice_override)
         ff = _materialize_template(ctx, req.template, req.params, s)
+        ff = _annotate_feature_frame_request(ff, req)
         if req.tags:
             ff = ff.set_tags(req.tags, overwrite=False)
 

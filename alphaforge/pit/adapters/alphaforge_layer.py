@@ -11,7 +11,7 @@ import pandas as pd
 from alphaforge.data.context import DataContext
 from alphaforge.pit.transforms import PITTransformResult, PITTransformSpec
 from alphaforge.pit.utils.timestamps import coerce_utc_timestamp, normalize_utc_day
-from alphaforge.time.ref_period import RefFreq, RefPeriod
+from alphaforge.time.ref_period import RefFreq, coerce_ref_period
 
 
 class AlphaForgePITLayer:
@@ -52,15 +52,15 @@ class AlphaForgePITLayer:
         self,
         series_key: str,
         asof: pd.Timestamp,
-        start_ref: str | RefPeriod | None = None,
-        end_ref: str | RefPeriod | None = None,
+        start_ref: object | None = None,
+        end_ref: object | None = None,
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        if isinstance(start_ref, str):
-            start_ref = RefPeriod.parse(start_ref)
-        if isinstance(end_ref, str):
-            end_ref = RefPeriod.parse(end_ref)
+        if start_ref is not None:
+            start_ref = coerce_ref_period(start_ref, freq=freq)
+        if end_ref is not None:
+            end_ref = coerce_ref_period(end_ref, freq=freq)
         return self._ctx.pit.get_snapshot_ref(
             series_key,
             asof=asof,
@@ -97,14 +97,13 @@ class AlphaForgePITLayer:
     def revisions_ref(
         self,
         series_key: str,
-        ref: str | RefPeriod,
+        ref: object,
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        if isinstance(ref, str):
-            ref = RefPeriod.parse(ref)
+        ref = coerce_ref_period(ref, freq=freq)
         return self._ctx.pit.get_revision_timeline_ref(
             series_key, ref=ref, start_asof=start_asof, end_asof=end_asof, freq=freq
         )

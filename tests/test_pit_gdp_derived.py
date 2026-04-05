@@ -73,7 +73,12 @@ def test_get_snapshot_multi_matches_single_snapshot_union(tmp_path):
         ],
         ignore_index=True,
     )[["series_key", "obs_date", "value"]].sort_values(["series_key", "obs_date"]).reset_index(drop=True)
-    pd.testing.assert_frame_equal(multi, expected, check_dtype=False)
+    pd.testing.assert_frame_equal(
+        multi[["series_key", "obs_date", "value"]],
+        expected,
+        check_dtype=False,
+    )
+    assert multi["source_asof_utc"].notna().all()
 
 
 def test_get_revision_path_multi_matches_single_requests(tmp_path):

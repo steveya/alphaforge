@@ -7,17 +7,24 @@ TEST_DIR = Path(__file__).resolve().parent
 
 NON_SOURCE_MODULES = {
     "__init__",
+    "archive",
+    "base",
+    "finalize",
     "http",
     "parsing",
+    "registry_api",
     "utils",
     "registry",
     "registry_loader",
+    "schema_helpers",
+    "tabular",
 }
 
 NON_MAPPING_TEST_FILES = {
     "__init__.py",
     "_fake_http.py",
     "test_live_sources.py",
+    "test_public_web_foundation.py",
     "test_source_test_mapping.py",
 }
 

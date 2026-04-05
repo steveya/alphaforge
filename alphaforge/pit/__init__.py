@@ -54,6 +54,12 @@ from .pipelines import (
     PITPipelineStep,
     coerce_pipeline_spec,
 )
+from .queries import (
+    RefRevisionQuery,
+    RefSnapshotQuery,
+    coerce_ref_revision_query,
+    coerce_ref_snapshot_query,
+)
 from .ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .resolvers import (
     FrozenResolver,
@@ -121,6 +127,10 @@ __all__ = [
     "PITPipelineSpec",
     "PITPipelineResult",
     "coerce_pipeline_spec",
+    "RefSnapshotQuery",
+    "RefRevisionQuery",
+    "coerce_ref_snapshot_query",
+    "coerce_ref_revision_query",
     "PITExpressionNode",
     "PITExpressionGraphSpec",
     "PITExpressionGraphResult",

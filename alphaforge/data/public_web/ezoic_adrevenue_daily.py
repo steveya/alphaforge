@@ -8,20 +8,14 @@ from typing import Any
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
 from .http import CachedHttpClient
-from .utils import (
-    apply_query_filters,
-    ensure_date_utc,
-    make_entity_id,
-    project_columns,
-    to_float,
-)
+from .schema_helpers import table_schema
+from .tabular import TabularDocumentSourceBase, artifact_name_from_url
+from .utils import ensure_date_utc, make_entity_id, to_float
 
 
-class EzoicAdRevenueDailySource(DataSource):
+class EzoicAdRevenueDailySource(TabularDocumentSourceBase):
     name: str = "ezoic_adrevenue_daily"
     TABLE = "ezoic.adrevenue.daily"
     URL = "https://adrevenueindex.ezoic.com/"
@@ -36,16 +30,14 @@ class EzoicAdRevenueDailySource(DataSource):
     ) -> None:
         self._page_url = page_url or self.URL
         self._data_url = data_url
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["value"],
                 canonical_columns=["value", "region", "category"],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="D",
                 time_semantics="point",
             )
@@ -85,8 +77,7 @@ class EzoicAdRevenueDailySource(DataSource):
             payload = self._http.get_bytes(
                 url=self._data_url,
                 source="ezoic_adrevenue_daily",
-                artifact_name=Path(self._data_url.split("?")[0]).name
-                or "adrevenue.json",
+                artifact_name=artifact_name_from_url(self._data_url, "adrevenue.json"),
             )
             parsed = json.loads(payload.decode())
             if isinstance(parsed, list):
@@ -99,26 +90,18 @@ class EzoicAdRevenueDailySource(DataSource):
         payload = self._http.get_bytes(
             url=self._page_url,
             source="ezoic_adrevenue_daily",
-            artifact_name=Path(self._page_url.split("?")[0]).name or "adrevenue.html",
+            artifact_name=artifact_name_from_url(self._page_url, "adrevenue.html"),
         )
         html = payload.decode(errors="ignore")
         return self._extract_records_from_html(html)
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
         records = self._load_records()
-        schema = self.schemas()[self.TABLE]
+        schema = self._schema()
         if not records:
-            return pd.DataFrame(
-                columns=[
-                    schema.time_column,
-                    schema.entity_column,
-                    "asof_utc",
-                    *schema.required_columns,
-                ]
-            )
+            return self._empty_frame(schema)
 
         frame = pd.DataFrame(records)
         date_col = "date" if "date" in frame.columns else "day"
@@ -135,18 +118,10 @@ class EzoicAdRevenueDailySource(DataSource):
         out["category"] = (
             frame[category_col].astype(str).str.lower() if category_col else "all"
         )
-        out["asof_utc"] = pd.Timestamp.now(tz="UTC")
+        out["asof_utc"] = self._asof_utc(q)
         out["entity_id"] = [
             make_entity_id("macro", "index", "adrevenue", region, "value", "ezoic")
             for region in out["region"]
         ]
 
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
-        )
-        return out.reset_index(drop=True)
+        return self._finalize(out, q=q, schema=schema, sort_by=[])

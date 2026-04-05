@@ -9,7 +9,10 @@ from alphaforge.data.source import DataSource
 
 class FREDDataSource(DataSource):
     """
-    Data source for fetching data from FRED.
+    Legacy/raw-loader FRED DataSource kept for compatibility.
+
+    New code should prefer ``alphaforge.data.sources.fred.FREDSourceAdapter``
+    via ``DataContext.fetch(...)``.
     """
 
     name: str = "fred"

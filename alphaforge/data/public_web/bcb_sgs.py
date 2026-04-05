@@ -7,14 +7,14 @@ from urllib.parse import urlencode
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
-from .utils import apply_query_filters, make_entity_id, project_columns
+from .schema_helpers import single_value_schema
+from .utils import make_entity_id
 
 
-class BCBSGSDataSource(DataSource):
+class BCBSGSDataSource(PublicWebSourceBase):
     name = "bcb_sgs"
     TABLE = "bcb_sgs_series"
 
@@ -25,19 +25,11 @@ class BCBSGSDataSource(DataSource):
         cache_dir: str | Path | None = None,
         base_url: str = "https://api.bcb.gov.br/dados/serie/bcdata.sgs",
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._base_url = base_url.rstrip("/")
 
-    def schemas(self) -> dict[str, TableSchema]:
-        return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
-                required_columns=["value"],
-                canonical_columns=["value"],
-                entity_column="entity_id",
-                time_column="date",
-            )
-        }
+    def schemas(self):
+        return {self.TABLE: single_value_schema(self.TABLE)}
 
     def _call(self, code: str, q: Query) -> pd.DataFrame:
         params = {"formato": "csv"}
@@ -54,11 +46,13 @@ class BCBSGSDataSource(DataSource):
         return frame
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
-        codes = [str(x) for x in (q.entities or [])]
-        if not codes:
-            raise ValueError("BCBSGSDataSource requires q.entities with SGS codes")
+        self._require_table(q)
+        schema = self._schema()
+        codes = self._require_entities(
+            q,
+            error_message="BCBSGSDataSource requires q.entities with SGS codes",
+        )
+        asof_utc = self._asof_utc(q)
 
         rows = []
         for code in codes:
@@ -77,7 +71,7 @@ class BCBSGSDataSource(DataSource):
                     "date": dates,
                     "entity_id": make_entity_id(code),
                     "value": vals,
-                    "asof_utc": q.asof or pd.Timestamp.now(tz="UTC"),
+                    "asof_utc": asof_utc,
                 }
             )
             rows.append(tmp)
@@ -85,17 +79,6 @@ class BCBSGSDataSource(DataSource):
         out = (
             pd.concat(rows, ignore_index=True)
             if rows
-            else pd.DataFrame(columns=["date", "entity_id", "asof_utc", "value"])
+            else self._empty_frame(schema)
         )
-        if out.empty:
-            return out
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        schema = self.schemas()[self.TABLE]
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col="date",
-            entity_col="entity_id",
-        )
-        return out.sort_values(["entity_id", "date"]).reset_index(drop=True)
+        return self._finalize(out, q=q, schema=schema)

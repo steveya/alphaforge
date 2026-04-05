@@ -24,6 +24,9 @@ _DEFAULT_METRICS = (
 def dtcc_daily_to_pit_observations(
     df: pd.DataFrame,
     metrics: Sequence[str] | None = None,
+    *,
+    key_prefix: str = "dtcc.ppd.daily.",
+    source_name: str = "dtcc_ppd",
 ) -> pd.DataFrame:
     """Convert DTCC PPD daily fetch output to PIT observation rows.
 
@@ -32,6 +35,8 @@ def dtcc_daily_to_pit_observations(
     df : DataFrame from DTCCPPDSource.fetch(table="dtcc.ppd.daily") with
         columns: date, entity_id, asof_utc, trade_count, notional_sum, etc.
     metrics : which series to emit.  Defaults to all five.
+    key_prefix : Prefix for the emitted series keys.
+    source_name : Value for the PIT lineage ``source`` column.
 
     Returns
     -------
@@ -53,6 +58,6 @@ def dtcc_daily_to_pit_observations(
         obs_date_col="obs_date",
         asof_col="asof_utc",
         value_vars=chosen,
-        key_prefix="dtcc.ppd.daily.",
-        source_name="dtcc_ppd",
+        key_prefix=key_prefix,
+        source_name=source_name,
     )

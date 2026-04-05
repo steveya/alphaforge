@@ -1,4 +1,4 @@
-"""Build the reduced Kim-Orphanides / Kim-Wright dataset with alphaforge."""
+"""Build the reduced Kim-Orphanides / Kim-Wright dataset with legacy loaders."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ def main() -> None:
     if not fred_api_key:
         raise RuntimeError("Set FRED_API_KEY before running this example.")
 
+    # This dataset helper still consumes the legacy/raw-loader DataSource shape.
     ctx = DataContext(
         sources={
             "fred": FREDDataSource(api_key=fred_api_key),

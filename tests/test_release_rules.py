@@ -70,6 +70,18 @@ class TestWeeklyRelease:
         result = rule.expected_release_date(date(2025, 1, 4))
         assert result == date(2025, 1, 9)
 
+    def test_release_weekday_changes_result_when_needed(self):
+        monday = WeeklyRelease(release_weekday="Monday", lag_days=0)
+        thursday = WeeklyRelease(release_weekday="Thursday", lag_days=0)
+
+        assert monday.expected_release_date(date(2025, 1, 4)) == date(2025, 1, 6)
+        assert thursday.expected_release_date(date(2025, 1, 4)) == date(2025, 1, 9)
+
+    def test_respects_weekday_after_lag_offset(self):
+        rule = WeeklyRelease(release_weekday="Monday", lag_days=5)
+        result = rule.expected_release_date(date(2025, 1, 4))
+        assert result == date(2025, 1, 13)
+
 
 class TestCustomRule:
     def test_serialization(self):

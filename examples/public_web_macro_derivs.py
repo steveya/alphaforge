@@ -64,6 +64,7 @@ def main() -> None:
         calendars={},
         store=LocalParquetStore(str(repo_root / "alphaforge_demo_store/public_web")),
     )
+    # This example exercises the public-web raw-loader/DataSource path directly.
 
     q_dtcc = Query(
         table="dtcc.ppd.daily",

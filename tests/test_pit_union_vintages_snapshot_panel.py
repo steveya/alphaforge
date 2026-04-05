@@ -107,3 +107,83 @@ def test_build_snapshot_panel_respects_asof_cut(tmp_path):
         asof=pd.Timestamp("2024-03-15", tz="UTC"),
     )
     assert panel.index.max() == pd.Timestamp("2024-02-29", tz="UTC")
+
+
+def test_get_snapshot_multi_includes_source_asof_metadata(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_df())
+
+    batch = pit.get_snapshot_multi(
+        ["GDP", "CPI"],
+        pd.Timestamp("2024-04-30", tz="UTC"),
+    )
+
+    assert {"series_key", "obs_date", "source_asof_utc", "value"} == set(batch.columns)
+    assert batch["source_asof_utc"].notna().all()
+
+
+def test_build_snapshot_panel_long_preserves_source_metadata(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_df())
+
+    panel = pit.build_snapshot_panel_long(
+        [
+            {"series_key": "GDP", "alias": "gdp"},
+            {"series_key": "CPI", "alias": "cpi", "release_policy": "latest"},
+        ],
+        asof=pd.Timestamp("2024-04-30", tz="UTC"),
+        align="month_end",
+    )
+
+    assert {
+        "series_key",
+        "series_alias",
+        "obs_date",
+        "source_obs_date",
+        "source_asof_utc",
+        "value",
+    } == set(panel.columns)
+    assert set(panel["series_alias"]) == {"gdp", "cpi"}
+    assert panel["source_asof_utc"].notna().all()
+    assert panel["obs_date"].dt.tz is not None
+
+
+def test_build_snapshot_panel_long_accepts_ref_anchor_specs(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(
+        pd.DataFrame(
+            {
+                "series_key": ["CPI", "CPI"],
+                "obs_date": [pd.Timestamp("2025-01-01"), pd.Timestamp("2025-02-01")],
+                "asof_utc": [
+                    pd.Timestamp("2025-01-15", tz="UTC"),
+                    pd.Timestamp("2025-02-15", tz="UTC"),
+                ],
+                "value": [3.0, 3.1],
+            }
+        )
+    )
+
+    panel = pit.build_snapshot_panel_long(
+        [
+            {
+                "series_key": "CPI",
+                "alias": "cpi",
+                "start_ref": "2025-01-01",
+                "end_ref": "2025-02-01",
+                "freq": "M",
+                "obs_date_anchor": "start",
+            }
+        ],
+        asof=pd.Timestamp("2025-03-01", tz="UTC"),
+        align="month_end",
+    )
+
+    assert list(panel["source_obs_date"]) == [
+        pd.Timestamp("2025-01-01", tz="UTC"),
+        pd.Timestamp("2025-02-01", tz="UTC"),
+    ]
+    assert list(panel["obs_date"]) == [
+        pd.Timestamp("2025-01-31", tz="UTC"),
+        pd.Timestamp("2025-02-28", tz="UTC"),
+    ]

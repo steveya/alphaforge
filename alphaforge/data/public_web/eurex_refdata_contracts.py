@@ -6,20 +6,15 @@ from pathlib import Path
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
-from .utils import (
-    apply_query_filters,
-    ensure_date_utc,
-    first_existing,
-    make_entity_id,
-    project_columns,
-)
+from .schema_helpers import table_schema
+from .tabular import resolved_text_series
+from .utils import ensure_date_utc, first_existing, make_entity_id
 
 
-class EurexRefdataContractsSource(DataSource):
+class EurexRefdataContractsSource(PublicWebSourceBase):
     name: str = "eurex_refdata_contracts"
     TABLE = "eurex.refdata.contracts"
 
@@ -31,12 +26,12 @@ class EurexRefdataContractsSource(DataSource):
         cache_dir: str | Path | None = None,
     ) -> None:
         self._api_url = api_url
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=[
                     "symbol",
                     "product_name",
@@ -55,16 +50,13 @@ class EurexRefdataContractsSource(DataSource):
                     "tick_size",
                     "isin",
                 ],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="D",
                 time_semantics="point",
             )
         }
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
         payload = self._http.get_bytes(
             url=self._api_url,
@@ -76,27 +68,26 @@ class EurexRefdataContractsSource(DataSource):
         records = data if isinstance(data, list) else data.get("data", [])
         frame = pd.DataFrame(records)
 
-        schema = self.schemas()[self.TABLE]
+        schema = self._schema()
         if frame.empty:
-            return pd.DataFrame(
-                columns=[
-                    schema.time_column,
-                    schema.entity_column,
-                    "asof_utc",
-                    *schema.required_columns,
-                ]
-            )
+            return self._empty_frame(schema, entity_col="entity_id")
 
         out = pd.DataFrame(index=frame.index)
-        out["symbol"] = frame[
-            first_existing(frame, "symbol", "contract_symbol")
-        ].astype(str)
-        out["product_name"] = frame[
-            first_existing(frame, "product_name", "product")
-        ].astype(str)
-        out["product_group"] = frame[
-            first_existing(frame, "product_group", "group")
-        ].astype(str)
+        out["symbol"] = resolved_text_series(
+            frame,
+            ["symbol", "contract_symbol"],
+            default="",
+        )
+        out["product_name"] = resolved_text_series(
+            frame,
+            ["product_name", "product"],
+            default="",
+        )
+        out["product_group"] = resolved_text_series(
+            frame,
+            ["product_group", "group"],
+            default="",
+        )
         out["currency"] = (
             frame[first_existing(frame, "currency", "ccy")].astype(str).str.lower()
         )
@@ -108,7 +99,7 @@ class EurexRefdataContractsSource(DataSource):
             src = first_existing(frame, col)
             out[col] = frame[src] if src else pd.NA
 
-        snapshot = pd.Timestamp.now(tz="UTC")
+        snapshot = self._asof_utc(q)
         out["date"] = snapshot.normalize()
         out["asof_utc"] = snapshot
 
@@ -123,12 +114,4 @@ class EurexRefdataContractsSource(DataSource):
             for symbol, expiry in zip(out["symbol"].str.lower(), out["expiry_date"])
         ]
 
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
-        )
-        return out.reset_index(drop=True)
+        return self._finalize(out, q=q, schema=schema, sort_by=[])

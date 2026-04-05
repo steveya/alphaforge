@@ -8,7 +8,9 @@ from alphaforge.pipeline.health import (
     DTCC_PPD_HEALTH_POLICY,
     SourceHealthPolicy,
     assess_source_health,
+    build_health_report,
 )
+from alphaforge.pit.release_rules import FixedLagMonths
 
 
 def _ts(days_ago: float) -> pd.Timestamp:
@@ -110,3 +112,115 @@ class TestExpectedNext:
         expected = latest + pd.Timedelta(days=7)
         assert h.expected_next is not None
         assert abs((h.expected_next - expected).total_seconds()) < 1
+
+
+class TestReleaseAwareHealth:
+    def test_release_rule_defers_health_until_expected_release(self) -> None:
+        policy = SourceHealthPolicy(
+            expected_cadence=pd.Timedelta(days=31),
+            release_rule=FixedLagMonths(months=2),
+            grace_period=pd.Timedelta(days=2),
+            stale_threshold=pd.Timedelta(days=14),
+            dead_threshold=pd.Timedelta(days=42),
+            weight_decay_half_life=pd.Timedelta(days=7),
+        )
+        latest = pd.Timestamp("2025-01-31", tz="UTC")
+        asof = pd.Timestamp("2025-03-15", tz="UTC")
+
+        h = assess_source_health("macro", latest, asof, policy)
+
+        assert h.status == "ok"
+        assert h.expected_next == pd.Timestamp("2025-04-01", tz="UTC")
+        assert h.overdue_days == 0.0
+
+    def test_release_rule_uses_release_delay_for_late_status(self) -> None:
+        policy = SourceHealthPolicy(
+            expected_cadence=pd.Timedelta(days=31),
+            release_rule=FixedLagMonths(months=2),
+            grace_period=pd.Timedelta(days=2),
+            stale_threshold=pd.Timedelta(days=14),
+            dead_threshold=pd.Timedelta(days=42),
+            weight_decay_half_life=pd.Timedelta(days=7),
+        )
+        latest = pd.Timestamp("2025-01-31", tz="UTC")
+        asof = pd.Timestamp("2025-04-05", tz="UTC")
+
+        h = assess_source_health("macro", latest, asof, policy)
+
+        assert h.status == "late"
+        assert h.expected_next == pd.Timestamp("2025-04-01", tz="UTC")
+        assert h.overdue_days == 4.0
+
+    def test_weekly_release_weekday_changes_expected_next(self) -> None:
+        from alphaforge.time.release_rules import WeeklyRelease
+
+        latest = pd.Timestamp("2025-01-04", tz="UTC")
+        asof = pd.Timestamp("2025-01-07", tz="UTC")
+
+        monday = assess_source_health(
+            "weekly",
+            latest,
+            asof,
+            SourceHealthPolicy(
+                expected_cadence=pd.Timedelta(days=7),
+                release_rule=WeeklyRelease(release_weekday="Monday", lag_days=0),
+                grace_period=pd.Timedelta(days=0),
+                stale_threshold=pd.Timedelta(days=7),
+                dead_threshold=pd.Timedelta(days=21),
+                weight_decay_half_life=pd.Timedelta(days=7),
+            ),
+        )
+        thursday = assess_source_health(
+            "weekly",
+            latest,
+            asof,
+            SourceHealthPolicy(
+                expected_cadence=pd.Timedelta(days=7),
+                release_rule=WeeklyRelease(release_weekday="Thursday", lag_days=0),
+                grace_period=pd.Timedelta(days=0),
+                stale_threshold=pd.Timedelta(days=7),
+                dead_threshold=pd.Timedelta(days=21),
+                weight_decay_half_life=pd.Timedelta(days=7),
+            ),
+        )
+
+        assert monday.expected_next == pd.Timestamp("2025-01-13", tz="UTC")
+        assert thursday.expected_next == pd.Timestamp("2025-01-16", tz="UTC")
+
+
+class TestHealthReport:
+    def test_build_health_report_keeps_release_aware_diagnostics(self) -> None:
+        macro_policy = SourceHealthPolicy(
+            expected_cadence=pd.Timedelta(days=31),
+            release_rule=FixedLagMonths(months=2),
+            grace_period=pd.Timedelta(days=2),
+            stale_threshold=pd.Timedelta(days=14),
+            dead_threshold=pd.Timedelta(days=42),
+            weight_decay_half_life=pd.Timedelta(days=7),
+        )
+        asof = pd.Timestamp("2025-04-05", tz="UTC")
+
+        report = build_health_report(
+            {
+                "macro": assess_source_health(
+                    "macro",
+                    pd.Timestamp("2025-01-31", tz="UTC"),
+                    asof,
+                    macro_policy,
+                ),
+                "weekly": assess_source_health(
+                    "weekly",
+                    pd.Timestamp("2025-03-28", tz="UTC"),
+                    asof,
+                    _POLICY,
+                ),
+            }
+        )
+
+        assert report["source_name"].tolist() == ["macro", "weekly"]
+        assert "expected_next" in report.columns
+        assert "overdue_days" in report.columns
+        macro_row = report.set_index("source_name").loc["macro"]
+        assert macro_row["status"] == "late"
+        assert macro_row["expected_next"] == pd.Timestamp("2025-04-01", tz="UTC")
+        assert macro_row["overdue_days"] == 4.0

@@ -2,6 +2,9 @@
 
 This guide defines stable contracts for PIT ingestion, transforms, and data-source queries.
 
+The repo-local regression gates for this contract live in
+[Core Platform Contracts And Benchmarks](contracts-and-benchmarks.md).
+
 ## Error model
 
 PIT uses typed exceptions:
@@ -185,12 +188,87 @@ Error mode rejects:
 
 ## Release helper contract
 
+## Ref query contract
+
+Typed ref-period PIT queries use:
+
+- `RefSnapshotQuery`
+- `RefRevisionQuery`
+
+Public execution APIs:
+
+- `PITAccessor.snapshot_ref(query)`
+  - accepts `RefSnapshotQuery` or a mapping with equivalent fields
+  - returns a `Series` indexed by typed `RefPeriod` values
+  - requires explicit `freq` when both `start_ref` and `end_ref` are omitted
+  - supports `obs_date_anchor="start" | "end"` for series whose stored
+    observation dates are period-start or period-end keyed
+- `PITAccessor.revisions_ref(query)`
+  - accepts `RefRevisionQuery` or a mapping with equivalent fields
+  - returns a revision timeline indexed by `asof_utc`
+  - names the output with the canonical ref-entity id form
+
+Compatibility wrappers:
+
+- `get_snapshot_ref(...)`
+- `get_revision_timeline_ref(...)`
+
+remain supported during migration, but they are compatibility helpers rather
+than the preferred public surface.
+
+The nowcast-style contract coverage for this surface lives in
+`tests/contracts/test_nowcast_pit_contract.py`.
+
 Release stream helpers for reference periods:
 
 - `list_release_stream(series_key, ref, asof=None, freq=None)`
   - returns one ref-period stream ordered by `asof_utc` with `release_rank`, `is_first`, and `is_latest`.
 - `resolve_release(series_key, ref, policy=..., asof=None, freq=None)`
   - supports policies: `"first"`, `"latest"`, `{"mode":"rank","rank":n}`, `{"mode":"horizon","horizon":...}`.
+
+## Series explainability contract
+
+Persisted derived series can be inspected with:
+
+- `get_series_lineage(series_key, start_obs=None, end_obs=None, start_asof=None, end_asof=None, limit=...)`
+- `explain_series(series_key, start_obs=None, end_obs=None, start_asof=None, end_asof=None, limit=...)`
+
+`get_series_lineage(...)` returns row-level provenance columns including:
+
+- `lineage_kind`
+- `transform_id`
+- `graph_id`
+- `node_name`
+- `input_series_keys`
+- `source_asof_utc`
+- `selected_input_asof_utc`
+- `source_asof_by_series_utc`
+- `max_source_asof_utc`
+- `causality_status`
+
+`lineage_kind` values:
+
+- `raw`
+- `transform`
+- `expression_graph`
+- `derived` for other persisted lineage payloads
+
+`causality_status` values:
+
+- `raw`
+- `ok`
+- `unknown`
+- `violation`
+- `experimental`
+
+`explain_series(...)` summarizes the row-level lineage into:
+
+- unique input series keys
+- transform ids
+- expression graph ids
+- row counts and derived-row counts
+- aggregate causality status counts
+- a boolean `causality_safe` summary flag
 
 ## Expression graph contract
 
@@ -212,8 +290,29 @@ Each node applies deterministic as-of alignment using union vintages of direct i
 
 - `list_union_vintages(series_keys, start, end, mode=\"event|calendar\")`
 - `build_snapshot_panel(series_specs, asof, align=\"month_end|quarter_end\", join=...)`
+- `build_snapshot_panel_long(series_specs, asof, align=\"month_end|quarter_end\")`
 
-Snapshot panels support per-series release policies and deterministic ref alignment.
+Snapshot panel semantics:
+
+- `get_snapshot_multi(...)` returns batch rows with:
+  - `series_key`
+  - `obs_date`
+  - `source_asof_utc`
+  - `value`
+- `build_snapshot_panel_long(...)` returns aligned long rows with:
+  - `series_key`
+  - `series_alias`
+  - `obs_date`
+  - `source_obs_date`
+  - `source_asof_utc`
+  - `value`
+- `build_snapshot_panel(...)` is the wide pivot over the aligned long form and
+  preserves explicit `join` semantics (`inner | left | right | outer`)
+- `SnapshotSeriesSpec` supports per-series `release_policy` plus optional
+  `start_ref`, `end_ref`, `freq`, and `obs_date_anchor` for explicit ref-aware
+  bounds
+- panel alignment is deterministic and explicit; aligned panel dates do not
+  discard the underlying source observation or source vintage metadata
 
 ## PIT contract versioning
 
@@ -226,7 +325,10 @@ Migration entries for contract/validation changes are recorded in `docs/guides/p
 
 ## Data-source query contract
 
-`PITDataSource` table semantics:
+`PITDataSource` remains the legacy/raw-loader `DataSource` bridge into PIT
+storage. Canonical PIT access lives on `PITAccessor`, but when a panel-style
+integration still needs the `DataSource` contract, `PITDataSource` exposes
+these table semantics:
 
 - `pit.snapshot`
   - requires `Query.asof`

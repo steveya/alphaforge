@@ -15,6 +15,23 @@ mypy alphaforge
 pytest
 ```
 
+## Core platform regression gates
+
+When a change touches canonical PIT, data-context, dataset, or operational
+surfaces from the roadmap, also run:
+
+```bash
+python -m pytest tests/contracts
+python -m benchmarks.pit
+```
+
+## Public web contributors
+
+For the public loader pack under `alphaforge.data.public_web`, use the
+dedicated [public-web source authoring guide](public-web-source-authoring.md).
+It covers helper-family selection, registry/export wiring, targeted test
+expectations, and the required docs plus Linear plan updates.
+
 ## Build package
 
 ```bash

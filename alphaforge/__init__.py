@@ -10,6 +10,8 @@ from .data.public_web import (
     BCBSGSDataSource,
     BEADataSource,
     BLSDataSource,
+    CFTCCoTSource,
+    CFTCDisaggregatedCoTSource,
     CFTCWeeklySwapsSource,
     CMEProductSlateSource,
     DestatisGenesisDataSource,
@@ -24,7 +26,9 @@ from .data.public_web import (
     FRBTermStructureBenchmarkSource,
     IBGESidraDataSource,
     LCHCDSClearDailySource,
+    MOFJGBYieldCurveSource,
     PhiladelphiaSPFMeanLevelSource,
+    default_public_web_sources,
 )
 from .data.query import Query
 from .data.schema import TableSchema
@@ -37,6 +41,7 @@ from .data.short_rates import (
 )
 from .data.universe import EntityMetadata, Universe
 from .features.frame import Artifact, FeatureFrame
+from .features.market import LagReturnsTemplate, RollingVolatilityTemplate
 from .features.ops import join_feature_frames, materialize
 from .features.realization import FeatureRealization, FitState
 from .features.template import FeatureTemplate, ParamSpec, SliceSpec
@@ -85,6 +90,12 @@ from .pit.pipelines import (
     PITPipelineStep,
     coerce_pipeline_spec,
 )
+from .pit.queries import (
+    RefRevisionQuery,
+    RefSnapshotQuery,
+    coerce_ref_revision_query,
+    coerce_ref_snapshot_query,
+)
 from .pit.ref_entity import make_ref_entity_id, parse_ref_entity_id
 from .pit.tasks import (
     build_snapshot_tape,
@@ -110,7 +121,25 @@ from .store.duckdb_parquet import DuckDBParquetStore
 from .time.align import AlignedPanel, AlignSpec, AvailabilityState, align_panel
 from .time.calendar import TradingCalendar
 from .time.grids import EventGrid, Grid, NativeGrid, SessionGrid
-from .time.ref_period import RefFreq, RefPeriod
+from .time.missingness import MissingnessReason, classify_missingness
+from .time.ref_period import (
+    ObsDateAnchor,
+    RefFreq,
+    RefPeriod,
+    coerce_ref_period,
+    normalize_obs_date_anchor,
+    normalize_ref_freq,
+)
+from .time.release_rules import (
+    CalendarDay,
+    CustomRule,
+    FixedLagMonths,
+    NthBusinessDay,
+    NthWeekday,
+    QuarterlyRelease,
+    ReleaseRule,
+    WeeklyRelease,
+)
 
 __all__ = [
     "DataContext",
@@ -132,6 +161,8 @@ __all__ = [
     "load_first_rate_futures_metadata",
     "BLSDataSource",
     "BEADataSource",
+    "CFTCCoTSource",
+    "CFTCDisaggregatedCoTSource",
     "EIADataSource",
     "EurostatDataSource",
     "ECBSDMXDataSource",
@@ -149,7 +180,9 @@ __all__ = [
     "LCHCDSClearDailySource",
     "EzoicAdRevenueDailySource",
     "FRBTermStructureBenchmarkSource",
+    "MOFJGBYieldCurveSource",
     "PhiladelphiaSPFMeanLevelSource",
+    "default_public_web_sources",
     "build_kim_orphanides_dataset",
     "build_policy_rule_dataset",
     "build_duan_weekly_dataset",
@@ -167,9 +200,25 @@ __all__ = [
     "align_panel",
     "RefFreq",
     "RefPeriod",
+    "ObsDateAnchor",
+    "coerce_ref_period",
+    "normalize_ref_freq",
+    "normalize_obs_date_anchor",
+    "ReleaseRule",
+    "NthBusinessDay",
+    "NthWeekday",
+    "CalendarDay",
+    "FixedLagMonths",
+    "QuarterlyRelease",
+    "WeeklyRelease",
+    "CustomRule",
+    "MissingnessReason",
+    "classify_missingness",
     "FeatureFrame",
     "Artifact",
+    "LagReturnsTemplate",
     "ParamSpec",
+    "RollingVolatilityTemplate",
     "SliceSpec",
     "FeatureTemplate",
     "FeatureRealization",
@@ -193,6 +242,10 @@ __all__ = [
     "PITPipelineSpec",
     "PITPipelineResult",
     "coerce_pipeline_spec",
+    "RefSnapshotQuery",
+    "RefRevisionQuery",
+    "coerce_ref_snapshot_query",
+    "coerce_ref_revision_query",
     "PITExpressionNode",
     "PITExpressionGraphSpec",
     "PITExpressionGraphResult",

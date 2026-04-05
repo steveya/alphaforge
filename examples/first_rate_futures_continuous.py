@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -14,7 +14,6 @@ if str(REPO_ROOT) not in sys.path:
 from alphaforge import (  # noqa: E402
     FirstRateFuturesConfig,
     FirstRateFuturesLoader,
-    Query,
     build_first_rate_futures_context,
 )
 
@@ -28,24 +27,20 @@ def main() -> None:
 
     ctx = build_first_rate_futures_context(cfg)
 
-    eod = ctx.fetch(
-        Query(
-            table="futures.continuous_eod_research",
-            columns=["open", "high", "low", "close", "volume", "active_contract_id"],
-            entities=["CL", "BZ"],  # WTI and Brent
-            start=pd.Timestamp("2024-01-01T00:00:00Z"),
-            end=pd.Timestamp("2024-03-31T23:59:59Z"),
-        )
+    eod = ctx.load(
+        "futures.continuous_eod_research",
+        columns=["open", "high", "low", "close", "volume", "active_contract_id"],
+        entities=["CL", "BZ"],  # WTI and Brent
+        start=pd.Timestamp("2024-01-01T00:00:00Z"),
+        end=pd.Timestamp("2024-03-31T23:59:59Z"),
     ).data.sort_values(["series_key", "obs_date"])
 
-    intraday = ctx.fetch(
-        Query(
-            table="futures.continuous_5m_execution",
-            columns=["close", "volume", "active_contract_id", "roll_flag"],
-            entities=["CL", "BZ"],
-            start=pd.Timestamp("2024-03-01T00:00:00Z"),
-            end=pd.Timestamp("2024-03-05T23:59:59Z"),
-        )
+    intraday = ctx.load(
+        "futures.continuous_5m_execution",
+        columns=["close", "volume", "active_contract_id", "roll_flag"],
+        entities=["CL", "BZ"],
+        start=pd.Timestamp("2024-03-01T00:00:00Z"),
+        end=pd.Timestamp("2024-03-05T23:59:59Z"),
     ).data.sort_values(["series_key", "obs_date"])
 
     print("Continuous EOD research series")
