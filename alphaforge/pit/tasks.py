@@ -350,8 +350,8 @@ def _normalize_asof_grid(
 
 
 def _resolve_snapshot_window(
-    start_ref: str | None,
-    end_ref: str | None,
+    start_ref: object | None,
+    end_ref: object | None,
 ) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
     start_obs = RefPeriod.parse(start_ref).end_obs_date() if start_ref is not None else None
     end_obs = RefPeriod.parse(end_ref).end_obs_date() if end_ref is not None else None

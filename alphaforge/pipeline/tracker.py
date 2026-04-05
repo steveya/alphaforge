@@ -56,6 +56,8 @@ class SourceHealthTracker:
                 asof=asof,
                 age=None,
                 age_days=None,
+                overdue=None,
+                overdue_days=None,
                 status="empty",
                 weight_factor=0.0,
                 expected_next=None,

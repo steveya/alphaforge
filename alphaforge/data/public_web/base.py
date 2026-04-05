@@ -31,6 +31,9 @@ class PublicWebSourceBase:
             raise AttributeError(f"{type(self).__name__} must define TABLE")
         return table
 
+    def schemas(self) -> dict[str, TableSchema]:
+        raise NotImplementedError
+
     def _schema(self, table: str | None = None) -> TableSchema:
         resolved_table = table or self._default_table()
         return self.schemas()[resolved_table]

@@ -5,10 +5,17 @@ import pandas as pd
 
 from ..data.context import DataContext
 from ..store.cache import MaterializationPolicy
+from ..store.store import Store
 from .dag import LineageGraph
 from .frame import FeatureFrame
 from .realization import FeatureRealization
 from .template import FeatureTemplate, SliceSpec
+
+
+def _require_store(ctx: DataContext) -> Store:
+    if ctx.store is None:
+        raise ValueError("Feature materialization requires a configured store.")
+    return ctx.store
 
 
 def materialize(
@@ -21,6 +28,7 @@ def materialize(
 ) -> FeatureFrame:
     """Materialize a FeatureRealization with caching and (optional) stateful fit."""
     rid = realization.id()
+    store = _require_store(ctx)
 
     if lineage is not None:
         lineage.add(
@@ -34,7 +42,7 @@ def materialize(
             },
         )
 
-    got = ctx.store.get_frame(rid)
+    got = store.get_frame(rid)
     if got is not None:
         return got
 
@@ -46,7 +54,7 @@ def materialize(
         st = None
 
     if st is not None:
-        art = ctx.store.put_state(
+        art = store.put_state(
             st, pickle.dumps(st, protocol=pickle.HIGHEST_PROTOCOL)
         )
         if lineage is not None:
@@ -69,7 +77,7 @@ def materialize(
     frame.validate()
 
     if policy.persist_mode == "always":
-        ctx.store.put_frame(rid, frame)
+        store.put_frame(rid, frame)
 
     return frame
 

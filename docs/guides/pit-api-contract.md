@@ -203,10 +203,14 @@ Public execution APIs:
   - requires explicit `freq` when both `start_ref` and `end_ref` are omitted
   - supports `obs_date_anchor="start" | "end"` for series whose stored
     observation dates are period-start or period-end keyed
+  - normalizes `freq` to canonical `RefFreq` values before execution and stores
+    the resolved `freq` / `obs_date_anchor` on the output `Series.attrs`
 - `PITAccessor.revisions_ref(query)`
   - accepts `RefRevisionQuery` or a mapping with equivalent fields
   - returns a revision timeline indexed by `asof_utc`
-  - names the output with the canonical ref-entity id form
+  - resolves the input ref to a canonical `RefPeriod` before execution
+  - names the output with the canonical ref-entity id form and stores the
+    resolved `RefPeriod` on `Series.attrs["ref_period"]`
 
 Compatibility wrappers:
 

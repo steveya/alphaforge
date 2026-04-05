@@ -7,7 +7,7 @@ Use :func:`discover_adapters` to find all installed adapters via
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from alphaforge.data.adapter import SourceAdapter
@@ -32,16 +32,16 @@ def discover_adapters() -> dict[str, type[SourceAdapter]]:
     if sys.version_info >= (3, 12):
         from importlib.metadata import entry_points
 
-        eps = entry_points(group="alphaforge.source_adapters")
+        eps: list[Any] = list(entry_points(group="alphaforge.source_adapters"))
     else:
         # Python 3.10–3.11 compat
         from importlib.metadata import entry_points as _ep
 
         all_eps = _ep()
         if isinstance(all_eps, dict):
-            eps = all_eps.get("alphaforge.source_adapters", [])
+            eps = list(all_eps.get("alphaforge.source_adapters", []))
         else:
-            eps = all_eps.select(group="alphaforge.source_adapters")
+            eps = list(all_eps.select(group="alphaforge.source_adapters"))
 
     result: dict[str, type[SourceAdapter]] = {}
     for ep in eps:

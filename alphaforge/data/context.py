@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 import pandas as pd
@@ -11,7 +11,7 @@ from ..store.duckdb_parquet import DuckDBParquetStore
 from ..store.store import Store
 from ..time.calendar import TradingCalendar
 from .panel import PanelFrame
-from .query import Query
+from .query import Query, VintageMode
 from .source import DataSource
 from .universe import EntityMetadata, Universe
 
@@ -240,7 +240,7 @@ class DataContext:
         end: Optional[pd.Timestamp | str] = None,
         entities: Optional[Sequence[str]] = None,
         asof: Optional[pd.Timestamp | str] = None,
-        vintage: str = "latest",
+        vintage: VintageMode = "latest",
         vintage_id: Optional[str] = None,
         grid: Optional[str] = None,
         source: Optional[str] = None,
@@ -306,7 +306,7 @@ class DataContext:
         dataset: str,
         *,
         source: Optional[str] = None,
-        asof_range: tuple = None,
+        asof_range: tuple[date, date] | None = None,
     ) -> "CacheManifest":
         """Warm cache for a dataset via the resolved adapter."""
         adapter = self._resolve_source(dataset, source)

@@ -95,6 +95,7 @@ class RefPeriod:
         obs_date_anchor: ObsDateAnchor | str = "end",
     ) -> "RefPeriod":
         requested_freq = normalize_ref_freq(freq)
+        ref_period: RefPeriod | None
 
         if isinstance(value, RefPeriod):
             ref_period = value
@@ -132,6 +133,8 @@ class RefPeriod:
                     obs_date_anchor=obs_date_anchor,
                 )
 
+        if ref_period is None:
+            raise ValueError("Reference period could not be resolved.")
         if requested_freq is not None and ref_period.freq != requested_freq:
             raise ValueError(
                 "Reference period frequency does not match the requested frequency."

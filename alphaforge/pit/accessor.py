@@ -13,7 +13,14 @@ import duckdb
 import pandas as pd
 from pandas.tseries.offsets import MonthEnd
 
-from alphaforge.time.ref_period import ObsDateAnchor, RefFreq, RefPeriod, coerce_ref_period
+from alphaforge.time.ref_period import (
+    ObsDateAnchor,
+    RefFreq,
+    RefPeriod,
+    coerce_ref_period,
+    normalize_obs_date_anchor,
+    normalize_ref_freq,
+)
 
 from .exceptions import (
     PITCausalityError,
@@ -974,7 +981,7 @@ class PITAccessor:
         freq: RefFreq | None = None,
         obs_date_anchor: ObsDateAnchor | str = "end",
     ) -> pd.Series:
-        def _resolve(ref_value: str | RefPeriod | None) -> pd.Timestamp | None:
+        def _resolve(ref_value: object | None) -> pd.Timestamp | None:
             if ref_value is None:
                 return None
             return self._resolve_ref_period(
@@ -1003,13 +1010,14 @@ class PITAccessor:
         query: RefSnapshotQuery | Mapping[str, Any],
     ) -> pd.Series:
         query_obj = coerce_ref_snapshot_query(query)
-        obs_date_anchor = str(query_obj.obs_date_anchor)
+        obs_date_anchor = normalize_obs_date_anchor(query_obj.obs_date_anchor)
+        freq = normalize_ref_freq(query_obj.freq)
         snap = self.get_snapshot_ref(
             query_obj.series_key,
             query_obj.asof,
             start_ref=query_obj.start_ref,
             end_ref=query_obj.end_ref,
-            freq=query_obj.freq,
+            freq=freq,
             obs_date_anchor=obs_date_anchor,
         )
         if snap.empty:
@@ -1022,7 +1030,7 @@ class PITAccessor:
         ref_index = [
             self._resolve_ref_period(
                 obs_date,
-                freq=query_obj.freq,
+                freq=freq,
                 obs_date_anchor=obs_date_anchor,
             )
             for obs_date in snap.index
@@ -1038,7 +1046,7 @@ class PITAccessor:
             index=pd.Index(ref_index, name="ref_period"),
             name=query_obj.series_key,
         )
-        out.attrs["freq"] = query_obj.freq
+        out.attrs["freq"] = freq
         out.attrs["obs_date_anchor"] = obs_date_anchor
         return out
 
@@ -1047,17 +1055,23 @@ class PITAccessor:
         query: RefRevisionQuery | Mapping[str, Any],
     ) -> pd.Series:
         query_obj = coerce_ref_revision_query(query)
-        obs_date_anchor = str(query_obj.obs_date_anchor)
-        series = self.get_revision_timeline_ref(
-            query_obj.series_key,
+        obs_date_anchor = normalize_obs_date_anchor(query_obj.obs_date_anchor)
+        freq = normalize_ref_freq(query_obj.freq)
+        ref_period = self._resolve_ref_period(
             query_obj.ref,
-            start_asof=query_obj.start_asof,
-            end_asof=query_obj.end_asof,
-            freq=query_obj.freq,
+            freq=freq,
             obs_date_anchor=obs_date_anchor,
         )
-        series.name = make_ref_entity_id(query_obj.series_key, query_obj.ref)
-        series.attrs["ref_period"] = query_obj.ref
+        series = self.get_revision_timeline_ref(
+            query_obj.series_key,
+            ref_period,
+            start_asof=query_obj.start_asof,
+            end_asof=query_obj.end_asof,
+            freq=freq,
+            obs_date_anchor=obs_date_anchor,
+        )
+        series.name = make_ref_entity_id(query_obj.series_key, ref_period)
+        series.attrs["ref_period"] = ref_period
         series.attrs["obs_date_anchor"] = obs_date_anchor
         return series
 
@@ -1325,14 +1339,15 @@ class PITAccessor:
         self,
         spec: SnapshotSeriesSpec,
     ) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
-        anchor = str(spec.obs_date_anchor)
+        anchor = normalize_obs_date_anchor(spec.obs_date_anchor)
+        freq = normalize_ref_freq(spec.freq)
 
         def _resolve(ref_value: object | None) -> pd.Timestamp | None:
             if ref_value is None:
                 return None
             return self._resolve_ref_period(
                 ref_value,
-                freq=spec.freq,
+                freq=freq,
                 obs_date_anchor=anchor,
             ).obs_date(anchor=anchor)
 

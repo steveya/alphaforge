@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeAlias
 
 import pandas as pd
 
@@ -19,7 +19,7 @@ from alphaforge.time.ref_period import (
 
 from .exceptions import PITContractError
 
-RefPeriodLike = RefPeriod | str | pd.Period | pd.Timestamp | date | datetime
+RefPeriodLike: TypeAlias = RefPeriod | str | pd.Period | pd.Timestamp | date | datetime
 
 
 def _coerce_series_key(value: object) -> str:

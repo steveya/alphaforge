@@ -56,6 +56,13 @@ class _ContractFile:
         return self.contract_year, self.contract_month
 
 
+@dataclass(frozen=True)
+class _RollEvent:
+    root_symbol: str
+    effective_session_date: pd.Timestamp
+    adjustment_factor: float
+
+
 def _parse_hhmm(value: str) -> tuple[int, int]:
     hour, minute = value.split(":")
     return int(hour), int(minute)
@@ -542,8 +549,11 @@ class FirstRateFuturesLoader:
         if contract_eod.empty or roll_schedule.empty:
             return pd.DataFrame()
 
+        def _as_float(value: object) -> float:
+            return float(pd.to_numeric(value, errors="raise"))
+
         selected_frames: list[pd.DataFrame] = []
-        roll_events: list[dict[str, object]] = []
+        roll_events: list[_RollEvent] = []
 
         for root_symbol, schedule in roll_schedule.groupby("root_symbol", sort=True):
             schedule = schedule.sort_values("start_session_date").reset_index(drop=True)
@@ -561,15 +571,15 @@ class FirstRateFuturesLoader:
                 first_subset_row = subset.index.min()
                 if pd.notna(row["rolled_from_contract_id"]):
                     subset.loc[first_subset_row, "roll_flag"] = True
-                    new_open = float(subset.iloc[0]["open"])
-                    prior_close = 1.0 if prior_end_row is None else float(prior_end_row["close"])
+                    new_open = _as_float(subset.iloc[0]["open"])
+                    prior_close = 1.0 if prior_end_row is None else _as_float(prior_end_row["close"])
                     factor = 1.0 if prior_close == 0 else new_open / prior_close
                     roll_events.append(
-                        {
-                            "root_symbol": root_symbol,
-                            "effective_session_date": pd.Timestamp(row["start_session_date"]),
-                            "adjustment_factor": factor,
-                        }
+                        _RollEvent(
+                            root_symbol=root_symbol,
+                            effective_session_date=pd.Timestamp(row["start_session_date"]),
+                            adjustment_factor=factor,
+                        )
                     )
                 prior_end_row = subset.sort_values("session_date").iloc[-1]
                 selected_frames.append(subset)
@@ -584,15 +594,15 @@ class FirstRateFuturesLoader:
 
         for event in roll_events:
             mask = (
-                (continuous["root_symbol"] == event["root_symbol"])
-                & (continuous["session_date"] < event["effective_session_date"])
+                (continuous["root_symbol"] == event.root_symbol)
+                & (continuous["session_date"] < event.effective_session_date)
             )
-            continuous.loc[mask, "cumulative_adjustment_factor"] *= float(event["adjustment_factor"])
+            continuous.loc[mask, "cumulative_adjustment_factor"] *= event.adjustment_factor
             start_mask = (
-                (continuous["root_symbol"] == event["root_symbol"])
-                & (continuous["session_date"] == event["effective_session_date"])
+                (continuous["root_symbol"] == event.root_symbol)
+                & (continuous["session_date"] == event.effective_session_date)
             )
-            continuous.loc[start_mask, "adjustment_factor"] = float(event["adjustment_factor"])
+            continuous.loc[start_mask, "adjustment_factor"] = event.adjustment_factor
 
         for column in ("open", "high", "low", "close"):
             continuous[f"raw_{column}"] = continuous[column]

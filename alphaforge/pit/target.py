@@ -112,8 +112,10 @@ def resolve_target_obs_date_anchor(
     2. ``"auto"`` uses catalog metadata ``obs_date_anchor`` for the target series.
     3. If metadata is missing/unknown, fallback is ``"end"``.
     """
-    if target_obs_date_anchor in {"start", "end"}:
-        return target_obs_date_anchor  # type: ignore[return-value]
+    if target_obs_date_anchor == "start":
+        return "start"
+    if target_obs_date_anchor == "end":
+        return "end"
     if target_obs_date_anchor != "auto":
         raise ValueError(
             f"target_obs_date_anchor must be one of 'auto', 'start', 'end', got "
@@ -121,8 +123,10 @@ def resolve_target_obs_date_anchor(
         )
     if catalog is not None:
         meta = catalog.get(target_series_key)
-        if meta is not None and meta.obs_date_anchor in {"start", "end"}:
-            return meta.obs_date_anchor  # type: ignore[return-value]
+        if meta is not None and meta.obs_date_anchor == "start":
+            return "start"
+        if meta is not None and meta.obs_date_anchor == "end":
+            return "end"
     return "end"
 
 
@@ -188,7 +192,7 @@ def list_quarterly_target_releases_asof_multi(
             }
         )
         try:
-            releases = adapter.list_pit_observations_asof_multi(requests)  # type: ignore[attr-defined]
+            releases = adapter.list_pit_observations_asof_multi(requests)
         except NotImplementedError:
             releases = pd.DataFrame()
         out: dict[str, pd.DataFrame] = {}

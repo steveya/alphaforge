@@ -15,6 +15,7 @@ dependencies = [
     "numpy>=1.23",
     "openpyxl>=3.1",
     "pandas>=2.0",
+    "pytz>=2024.1",
     "python-dateutil>=2.9.0.post0",
     "pyarrow>=14.0.1",
     "fredapi>=0.5.2",
@@ -33,6 +34,7 @@ dev = [
     "ruff>=0.4.0",
     "twine>=5.0.0",
     "types-python-dateutil>=2.9.0.20240316",
+    "types-pytz>=2025.2.0.20250516",
     "types-requests>=2.31.0.20240406",
     "types-PyYAML>=6.0.12.20250915",
 ]
