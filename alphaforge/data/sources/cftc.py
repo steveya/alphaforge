@@ -118,6 +118,7 @@ class CFTCAdapter(SourceAdapterBase):
 
             if all_cached and cached_frames:
                 combined = pd.concat(cached_frames, ignore_index=True)
+                combined["source"] = _DATASET_SOURCE_NAMES.get(dataset, "cftc_cot")
                 return FetchResult(
                     data=combined,
                     source=self.source_name,

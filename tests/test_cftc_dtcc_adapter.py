@@ -520,6 +520,38 @@ class TestCFTCAdapterBulkCache:
         assert result2.cached_at is not None
         assert len(result2.data) > 0
 
+    def test_cache_hit_preserves_source_column(self, cftc_adapter):
+        """Cache-hit path must return the lineage 'source' column identical to cache-miss."""
+        q = Query(
+            table="cot.tff", columns=["value"],
+            entities=["cftc.cot.tff.futures.eur.lev_money.cftc.net_positions"],
+            asof="2025-01-20",
+        )
+        # First fetch (cache miss) — source column comes from cot_to_pit_observations
+        miss_result = cftc_adapter.fetch(q)
+        assert "source" in miss_result.data.columns, "cache-miss result must have 'source' column"
+        miss_source_values = set(miss_result.data["source"].unique())
+
+        # Second fetch for same entity — cache hit
+        hit_result = cftc_adapter.fetch(q)
+        assert hit_result.cached_at is not None, "second fetch should be a cache hit"
+        assert "source" in hit_result.data.columns, "cache-hit result must have 'source' column"
+        assert set(hit_result.data["source"].unique()) == miss_source_values
+
+    def test_cache_hit_preserves_disagg_source_column(self, cftc_multi_adapter):
+        """Cache-hit path for disagg dataset must carry the correct 'cftc_cot_disagg' source."""
+        q = Query(
+            table="cot.disagg", columns=["value"],
+            entities=["cftc.cot.disagg.futures.wheat_srw.m_money.cftc.net_positions"],
+            asof="2025-01-20",
+        )
+        cftc_multi_adapter.fetch(q)  # Populate cache
+
+        hit_result = cftc_multi_adapter.fetch(q)
+        assert hit_result.cached_at is not None
+        assert "source" in hit_result.data.columns
+        assert hit_result.data["source"].eq("cftc_cot_disagg").all()
+
 
 class TestCFTCAdapterPrefetch:
     def test_prefetch_returns_manifest(self, cftc_adapter):
