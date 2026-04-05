@@ -61,7 +61,7 @@ include-package-data = true
 exclude-package-data = { "*" = ["alphaforge_demo_store/**"] }
 
 [tool.setuptools.packages.find]
-include = ["alphaforge", "alphaforge.*"]
+include = ["alphaforge", "alphaforge.*", "benchmarks", "benchmarks.*"]
 
 [tool.setuptools.package-data]
 alphaforge = ["**/*.yaml"]
