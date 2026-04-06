@@ -113,10 +113,11 @@ class CacheLayer:
 
         # Update manifest — query aggregate stats from the full table
         # Get total row count for this dataset+source in the table
-        total_rows = self._conn.execute(
+        total_rows_row = self._conn.execute(
             f"SELECT COUNT(*) FROM {table} WHERE dataset = ? AND source = ?",
             [dataset, source],
-        ).fetchone()[0]
+        ).fetchone()
+        total_rows = int(total_rows_row[0]) if total_rows_row is not None else 0
 
         # Get all entity keys for this dataset+source
         all_keys = self._conn.execute(
@@ -124,14 +125,16 @@ class CacheLayer:
             [dataset, source],
         ).fetchdf()["series_key"].tolist()
 
-        all_min = self._conn.execute(
+        all_min_row = self._conn.execute(
             f"SELECT MIN(obs_date) FROM {table} WHERE dataset = ? AND source = ?",
             [dataset, source],
-        ).fetchone()[0]
-        all_max = self._conn.execute(
+        ).fetchone()
+        all_min = all_min_row[0] if all_min_row is not None else None
+        all_max_row = self._conn.execute(
             f"SELECT MAX(obs_date) FROM {table} WHERE dataset = ? AND source = ?",
             [dataset, source],
-        ).fetchone()[0]
+        ).fetchone()
+        all_max = all_max_row[0] if all_max_row is not None else None
 
         entity_keys_str = ",".join(all_keys)
 

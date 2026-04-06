@@ -34,15 +34,30 @@ def build_pit_panel(
     -------
     Wide DataFrame with index=obs_date, columns=column_name.
     """
-    series: dict[str, pd.Series] = {}
-    for col_name, skey in series_keys.items():
-        snap = pit.get_snapshot(skey, asof, start=start, end=end)
-        series[col_name] = snap
-
-    if not series:
+    if not series_keys:
         return pd.DataFrame()
 
-    df = pd.DataFrame(series)
+    batch = pit.get_snapshot_multi(
+        list(series_keys.values()),
+        asof,
+        start=start,
+        end=end,
+    )
+    if batch.empty:
+        return pd.DataFrame(columns=list(series_keys.keys()))
+
+    by_key = (
+        batch.pivot_table(
+            index="obs_date",
+            columns="series_key",
+            values="value",
+            aggfunc="first",
+        )
+        .sort_index()
+    )
+    df = pd.DataFrame(index=by_key.index)
+    for col_name, skey in series_keys.items():
+        df[col_name] = by_key[skey] if skey in by_key.columns else pd.Series(index=by_key.index)
 
     if align_freq is not None:
         new_idx = pd.date_range(

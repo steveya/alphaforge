@@ -7,7 +7,12 @@ import pandas as pd
 
 from alphaforge.pit.accessor import PITAccessor
 
-from .health import SourceHealthPolicy, SourceHealthStatus, assess_source_health
+from .health import (
+    SourceHealthPolicy,
+    SourceHealthStatus,
+    assess_source_health,
+    build_health_report,
+)
 
 _STATUS_CODE = {"ok": 0, "late": 1, "stale": 2, "dead": 3, "empty": 4}
 
@@ -51,6 +56,8 @@ class SourceHealthTracker:
                 asof=asof,
                 age=None,
                 age_days=None,
+                overdue=None,
+                overdue_days=None,
                 status="empty",
                 weight_factor=0.0,
                 expected_next=None,
@@ -93,9 +100,23 @@ class SourceHealthTracker:
                 "value": status.age_days,
                 "source": "health",
             })
+        if status.overdue_days is not None:
+            rows.append(
+                {
+                    "series_key": f"{base}.overdue_days",
+                    "obs_date": obs_date,
+                    "asof_utc": asof,
+                    "value": status.overdue_days,
+                    "source": "health",
+                }
+            )
 
         df = pd.DataFrame(rows)
         self.pit.upsert_pit_observations(df, strict="coerce")
+
+    def report(self, asof: pd.Timestamp) -> pd.DataFrame:
+        """Return a dataframe report for all configured source policies."""
+        return build_health_report(self.assess_all(asof))
 
     def history(
         self,

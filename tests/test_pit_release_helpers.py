@@ -74,3 +74,12 @@ def test_release_helpers_validate_ref_frequency(tmp_path):
 
     with pytest.raises(PITContractError, match="frequency"):
         pit.list_release_stream("GDP", "2024Q4", freq=RefFreq.M)
+
+
+def test_release_helpers_accept_pandas_period_refs(tmp_path):
+    pit = _make_accessor(tmp_path)
+    pit.upsert_pit_observations(_sample_release_df())
+
+    stream = pit.list_release_stream("GDP", pd.Period("2024Q4", freq="Q"))
+
+    assert stream["ref_key"].tolist() == ["2024Q4", "2024Q4", "2024Q4"]

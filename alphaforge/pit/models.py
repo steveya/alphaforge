@@ -7,6 +7,13 @@ from typing import Any, Literal, Mapping, TypedDict, cast
 
 import pandas as pd
 
+from alphaforge.time.ref_period import (
+    ObsDateAnchor,
+    RefFreq,
+    normalize_obs_date_anchor,
+    normalize_ref_freq,
+)
+
 from .exceptions import PITContractError
 
 JoinMode = Literal["inner", "left", "right", "outer"]
@@ -164,8 +171,10 @@ class PITExpressionGraphResult:
 class SnapshotSeriesSpec:
     series_key: str
     alias: str | None = None
-    start_ref: str | None = None
-    end_ref: str | None = None
+    start_ref: object | None = None
+    end_ref: object | None = None
+    freq: RefFreq | str | None = None
+    obs_date_anchor: ObsDateAnchor | str = "end"
     release_policy: ReleaseSelectionPolicy = "latest"
 
 
@@ -299,7 +308,15 @@ def coerce_snapshot_series_spec(
     if not isinstance(spec, Mapping):
         raise PITContractError("Snapshot series spec must be SnapshotSeriesSpec or a mapping.")
 
-    allowed_keys = {"series_key", "alias", "start_ref", "end_ref", "release_policy"}
+    allowed_keys = {
+        "series_key",
+        "alias",
+        "start_ref",
+        "end_ref",
+        "freq",
+        "obs_date_anchor",
+        "release_policy",
+    }
     unknown_keys = sorted(set(spec.keys()) - allowed_keys)
     if unknown_keys:
         raise PITContractError(f"Unknown snapshot series spec keys: {unknown_keys}")
@@ -309,8 +326,14 @@ def coerce_snapshot_series_spec(
         raise PITContractError("Snapshot series spec requires non-empty series_key.")
 
     alias = _cast_or_none(spec.get("alias"))
-    start_ref = _cast_or_none(spec.get("start_ref"))
-    end_ref = _cast_or_none(spec.get("end_ref"))
+    start_ref = spec.get("start_ref")
+    end_ref = spec.get("end_ref")
+    if isinstance(start_ref, str) and not start_ref.strip():
+        start_ref = None
+    if isinstance(end_ref, str) and not end_ref.strip():
+        end_ref = None
+    freq = normalize_ref_freq(spec.get("freq"))
+    obs_date_anchor = normalize_obs_date_anchor(spec.get("obs_date_anchor", "end"))
     release_policy = spec.get("release_policy", "latest")
 
     return SnapshotSeriesSpec(
@@ -318,6 +341,8 @@ def coerce_snapshot_series_spec(
         alias=alias,
         start_ref=start_ref,
         end_ref=end_ref,
+        freq=freq,
+        obs_date_anchor=obs_date_anchor,
         release_policy=release_policy,
     )
 

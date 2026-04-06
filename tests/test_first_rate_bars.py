@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphaforge import FirstRateBarsConfig, Query, build_first_rate_bars_context
+from alphaforge import FirstRateBarsConfig, build_first_rate_bars_context
 
 
 def _write_rows(path: Path, rows: list[str]) -> None:
@@ -50,14 +50,12 @@ def test_first_rate_bars_context_discovers_entities_and_fetches_rows(tmp_path) -
     assert adapter.list_entities("crypto.contract_price_5m") == ["BTC"]
     assert adapter.list_entities("index.level_5m") == ["DAX"]
 
-    fx = ctx.fetch(
-        Query(
-            table="fx.contract_price_5m",
-            columns=["bar_start_utc", "close", "volume"],
-            entities=["AUDUSD"],
-            start="2010-01-03T22:05:00Z",
-            end="2010-01-03T22:10:00Z",
-        )
+    fx = ctx.load(
+        "fx.contract_price_5m",
+        columns=["bar_start_utc", "close", "volume"],
+        entities=["AUDUSD"],
+        start="2010-01-03T22:05:00Z",
+        end="2010-01-03T22:10:00Z",
     )
     assert fx.source == "first_rate_bars"
     assert fx.dataset == "fx.contract_price_5m"
@@ -69,22 +67,18 @@ def test_first_rate_bars_context_discovers_entities_and_fetches_rows(tmp_path) -
     ]
     assert fx.data["bar_start_utc"].tolist()[0] == pd.Timestamp("2010-01-03 22:00:00+00:00")
 
-    crypto = ctx.fetch(
-        Query(
-            table="crypto.contract_price_5m",
-            columns=["close", "volume"],
-            entities=["BTC"],
-        )
+    crypto = ctx.load(
+        "crypto.contract_price_5m",
+        columns=["close", "volume"],
+        entities=["BTC"],
     )
     assert crypto.data["series_key"].tolist() == ["BTC", "BTC"]
     assert crypto.data["close"].tolist() == [93.183, 93.24]
 
-    index = ctx.fetch(
-        Query(
-            table="index.level_5m",
-            columns=["bar_start_utc", "close"],
-            entities=["DAX"],
-        )
+    index = ctx.load(
+        "index.level_5m",
+        columns=["bar_start_utc", "close"],
+        entities=["DAX"],
     )
     assert index.data["series_key"].tolist() == ["DAX", "DAX"]
     assert "volume" not in index.data.columns

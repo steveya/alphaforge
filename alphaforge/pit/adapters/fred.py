@@ -32,12 +32,13 @@ class FREDALFREDAdapter(PITAdapter):
         Args:
             api_key: FRED API key. If None, reads from FRED_API_KEY env var.
         """
-        self._api_key = api_key or os.getenv("FRED_API_KEY")
-        if not self._api_key:
+        resolved_api_key = api_key or os.getenv("FRED_API_KEY")
+        if not resolved_api_key:
             raise ValueError(
                 "FRED API key required. Set FRED_API_KEY environment variable "
                 "or pass api_key parameter."
             )
+        self._api_key = resolved_api_key
         self._session = requests.Session()
         self._vintage_cache: dict[str, tuple[list[date], float]] = {}
         self._cache_ttl = 86400  # 24 hours

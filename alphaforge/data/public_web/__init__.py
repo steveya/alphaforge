@@ -3,6 +3,7 @@ from .b3_historical_quotes import B3HistoricalQuotesDataSource
 from .bcb_sgs import BCBSGSDataSource
 from .bea import BEADataSource
 from .bls import BLSDataSource
+from .cftc_cot import CFTCCoTSource, CFTCDisaggregatedCoTSource
 from .cftc_swaps_weekly import CFTCWeeklySwapsSource
 from .cme_productslate_reference import CMEProductSlateSource
 from .destatis_genesis import DestatisGenesisDataSource
@@ -24,6 +25,8 @@ from .registry import default_public_web_sources
 __all__ = [
     "BLSDataSource",
     "BEADataSource",
+    "CFTCCoTSource",
+    "CFTCDisaggregatedCoTSource",
     "EIADataSource",
     "EurostatDataSource",
     "ECBSDMXDataSource",

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed `mypy alphaforge` regressions across ref-period PIT query normalization, `DataContext` adapter signatures, PIT adapter wrappers, cache manifest aggregation, futures loaders, and optional-store handling so the existing type-check CI gate passes on this branch.
+- Declared explicit `pytz` runtime dependency and `types-pytz` development stub so fresh installs and docs-example CI no longer rely on pandas pulling timezone support transitively.
+- Clarified the PIT ref-query public contract: `RefSnapshotQuery` / `RefRevisionQuery` plus `snapshot_ref(...)` / `revisions_ref(...)` are the canonical surface, while `get_snapshot_ref(...)` and `get_revision_timeline_ref(...)` remain compatibility wrappers.
 - Added unified data layer with `SourceAdapter` protocol, `SourceAdapterBase` mixin, `FetchResult`/`CacheManifest` value types, and `CacheLayer` (DuckDB-backed PIT/market cache).
 - Added built-in source adapters: `TiingoAdapter` (market OHLCV), `FREDSourceAdapter` (macro PIT), `CFTCAdapter` (CoT positioning), `DTCCAdapter` (swap derivatives).
 - Added `alphaforge.source_adapters` entry-point group and `discover_adapters()` for plugin-style adapter registration.

@@ -10,6 +10,7 @@ import pandas as pd
 
 from alphaforge.data.context import DataContext
 from alphaforge.data.query import Query
+from alphaforge.pit.accessor import PITAccessor
 from alphaforge.pit.adapters.alphaforge_layer import AlphaForgePITLayer
 from alphaforge.pit.adapters.base import PITAdapter
 from alphaforge.pit.observation import PITObservation, SeriesMetadata
@@ -41,7 +42,10 @@ class AlphaForgePITAdapter(PITAdapter):
     """Point-in-time data adapter for AlphaForge."""
 
     def __init__(self, ctx: DataContext) -> None:
+        if ctx.pit is None:
+            raise ValueError("AlphaForge PIT adapter requires PIT-enabled DataContext")
         self._ctx = ctx
+        self._pit: PITAccessor = ctx.pit
         self._layer = AlphaForgePITLayer(ctx)
 
     @property
@@ -52,7 +56,7 @@ class AlphaForgePITAdapter(PITAdapter):
         return True
 
     def list_vintages(self, query_series_key: str) -> list[date]:
-        conn = self._ctx.pit.conn
+        conn = self._pit.conn
         rows = conn.execute(
             "SELECT DISTINCT asof_utc FROM pit_observations WHERE series_key = ?",
             [query_series_key],
@@ -131,7 +135,7 @@ class AlphaForgePITAdapter(PITAdapter):
                     "release_time_utc": pd.NaT,
                 }
             )
-            self._ctx.pit.upsert_pit_observations(pit_df)
+            self._pit.upsert_pit_observations(pit_df)
 
         snap = self._layer.snapshot(query_series_key, asof=asof_ts, start=start_ts, end=end_ts)
 

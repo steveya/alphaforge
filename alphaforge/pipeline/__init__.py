@@ -9,6 +9,8 @@ from .health import (
     SourceHealthStatus,
     assess_health,
     assess_source_health,
+    build_health_report,
+    health_report,
 )
 from .protocols import (
     Filter,
@@ -40,5 +42,7 @@ __all__ = [
     "HealthStatus",
     "HealthTracker",
     "assess_health",
+    "build_health_report",
+    "health_report",
     "adjust_weights_for_health",
 ]

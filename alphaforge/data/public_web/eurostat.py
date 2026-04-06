@@ -8,15 +8,13 @@ from urllib.parse import urlencode
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
 from .http import CachedHttpClient
-from .registry_loader import load_registry_entries, map_registry
-from .utils import apply_query_filters, project_columns
+from .registry_api import RegistryApiSourceBase
+from .schema_helpers import single_value_schema
 
 
-class EurostatDataSource(DataSource):
+class EurostatDataSource(RegistryApiSourceBase):
     name = "eurostat"
     TABLE = "eurostat_series"
 
@@ -29,25 +27,17 @@ class EurostatDataSource(DataSource):
         registry_entries: list[dict] | None = None,
         registry_path: str | Path | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._base_url = base_url.rstrip("/")
-        entries = load_registry_entries(
+        self._init_registry(
             "eurostat_series.yaml",
-            entries=registry_entries,
+            registry_entries=registry_entries,
             registry_path=registry_path,
         )
-        self._registry = map_registry(entries)
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
-                required_columns=["value"],
-                canonical_columns=["value"],
-                entity_column="entity_id",
-                time_column="date",
-                native_freq="M",
-            )
+            self.TABLE: single_value_schema(self.TABLE, native_freq="M")
         }
 
     @staticmethod
@@ -101,17 +91,15 @@ class EurostatDataSource(DataSource):
         return frame
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
-        entities = list(q.entities or [])
-        if not entities:
-            raise ValueError("EurostatDataSource requires q.entities registry keys")
+        self._require_table(q)
+        schema = self._schema()
+        asof_utc = self._asof_utc(q)
 
         rows = []
-        for entity in entities:
-            cfg = self._registry.get(str(entity))
-            if cfg is None:
-                continue
+        for entity, cfg in self._iter_entity_configs(
+            q,
+            error_message="EurostatDataSource requires q.entities registry keys",
+        ):
             df = self._call(cfg)
             period_col = (
                 "period"
@@ -134,20 +122,9 @@ class EurostatDataSource(DataSource):
                         "date": date,
                         "entity_id": str(entity),
                         "value": pd.to_numeric(row[value_col], errors="coerce"),
-                        "asof_utc": q.asof or pd.Timestamp.now(tz="UTC"),
+                        "asof_utc": asof_utc,
                     }
                 )
 
-        out = pd.DataFrame(rows)
-        if out.empty:
-            return pd.DataFrame(columns=["date", "entity_id", "asof_utc", "value"])
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        schema = self.schemas()[self.TABLE]
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col="date",
-            entity_col="entity_id",
-        )
-        return out.sort_values(["entity_id", "date"]).reset_index(drop=True)
+        out = self._frame_from_records(rows, schema=schema)
+        return self._finalize(out, q=q, schema=schema)

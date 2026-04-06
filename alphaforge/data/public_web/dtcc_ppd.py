@@ -8,25 +8,23 @@ from typing import Callable
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
 from .parsing import parse_zip_csv_bytes
+from .schema_helpers import event_table_schema, table_schema
 from .utils import (
-    apply_query_filters,
     bucket_tenor,
     coalesce_columns,
     ensure_date_utc,
     ensure_utc,
     make_entity_id,
     normalize_ccy,
-    project_columns,
     to_float,
 )
 
 
-class DTCCPPDSource(DataSource):
+class DTCCPPDSource(PublicWebSourceBase):
     name: str = "dtcc_ppd"
 
     EVENTS_TABLE = "dtcc.ppd.events"
@@ -45,7 +43,11 @@ class DTCCPPDSource(DataSource):
         artifact_provider: Callable[[str], bytes] | None = None,
         now_fn: Callable[[], pd.Timestamp] | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(
+            http_client=http_client,
+            cache_dir=cache_dir,
+            now_fn=now_fn,
+        )
         self._api_base_url = api_base_url.rstrip("/")
         self._jurisdiction = jurisdiction.upper()
         self._jurisdiction_lower = jurisdiction.lower()
@@ -53,12 +55,11 @@ class DTCCPPDSource(DataSource):
         self._asset_codes = asset_codes
         self._list_provider = list_provider
         self._artifact_provider = artifact_provider
-        self._now_fn = now_fn or (lambda: pd.Timestamp.now(tz="UTC"))
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.EVENTS_TABLE: TableSchema(
-                name=self.EVENTS_TABLE,
+            self.EVENTS_TABLE: event_table_schema(
+                self.EVENTS_TABLE,
                 required_columns=[
                     "asset_class",
                     "product",
@@ -83,15 +84,12 @@ class DTCCPPDSource(DataSource):
                     "maturity_date",
                     "reported_at_utc",
                 ],
-                entity_column="entity_id",
-                time_column="ts_utc",
                 native_freq="D",
                 time_semantics="point",
-                event_time_column="ts_utc",
                 release_time_column="asof_utc",
             ),
-            self.DAILY_TABLE: TableSchema(
-                name=self.DAILY_TABLE,
+            self.DAILY_TABLE: table_schema(
+                self.DAILY_TABLE,
                 required_columns=[
                     "trade_count",
                     "notional_sum",
@@ -113,8 +111,6 @@ class DTCCPPDSource(DataSource):
                     "price_p90",
                     "notional_p90",
                 ],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="D",
                 time_semantics="interval_end",
             ),
@@ -321,7 +317,7 @@ class DTCCPPDSource(DataSource):
         )
         out["cleared"] = cleared.isin({"1", "true", "yes", "y"})
 
-        out["asof_utc"] = out["reported_at_utc"].fillna(self._now_fn())
+        out["asof_utc"] = out["reported_at_utc"].fillna(self._now_utc())
 
         asset_norm = (
             out["asset_class"]
@@ -391,42 +387,33 @@ class DTCCPPDSource(DataSource):
         if q.table not in {self.EVENTS_TABLE, self.DAILY_TABLE}:
             raise ValueError(f"Unknown table: {q.table}")
 
-        start = q.start or (self._now_fn().normalize() - pd.Timedelta(days=7))
-        end = q.end or self._now_fn()
+        now_utc = self._now_utc()
+        start = q.start or (now_utc.normalize() - pd.Timedelta(days=7))
+        end = q.end or now_utc
 
         events = self._load_events_for_range(start=start, end=end, table=q.table)
+        schema = self._schema(q.table)
         if events.empty:
-            schema = self.schemas()[q.table]
-            cols = [
-                schema.time_column,
-                schema.entity_column,
-                "asof_utc",
-                *schema.required_columns,
-            ]
-            return pd.DataFrame(columns=cols)
-
-        if q.table == self.EVENTS_TABLE:
-            schema = self.schemas()[self.EVENTS_TABLE]
-            out = apply_query_filters(
-                events, q=q, time_col="ts_utc", entity_col="entity_id"
-            )
-            out = project_columns(
-                out,
-                required_columns=schema.required_columns,
-                requested_columns=q.columns,
+            return self._empty_frame(
+                schema,
                 time_col=schema.time_column,
                 entity_col=schema.entity_column,
             )
-            return out.reset_index(drop=True)
 
-        schema = self.schemas()[self.DAILY_TABLE]
+        if q.table == self.EVENTS_TABLE:
+            return self._finalize(
+                events,
+                q=q,
+                schema=schema,
+                time_col="ts_utc",
+                entity_col="entity_id",
+                sort_by=[],
+            )
+
         daily = self._aggregate_daily(events)
-        daily = apply_query_filters(daily, q=q, time_col="date", entity_col="entity_id")
-        daily = project_columns(
+        return self._finalize(
             daily,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
+            q=q,
+            schema=schema,
+            sort_by=[],
         )
-        return daily.reset_index(drop=True)

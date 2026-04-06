@@ -12,6 +12,16 @@ This guide tracks PIT contract versions and required migration actions for break
 
 ## Entries
 
+### Version 2.2.0
+
+- **Date:** 2026-04-05
+- **Change Type:** non-breaking
+- **Summary:** Stabilized the typed ref-period PIT query surface around `RefSnapshotQuery` / `RefRevisionQuery` and the canonical `snapshot_ref(...)` / `revisions_ref(...)` APIs, while keeping the older direct helper methods as compatibility wrappers.
+- **Required Actions:**
+  1. Existing `get_snapshot_ref(...)` and `get_revision_timeline_ref(...)` callers remain valid; no forced migration is required.
+  2. Prefer `snapshot_ref(...)` and `revisions_ref(...)` with typed query objects or equivalent mappings for new code so `freq` and `obs_date_anchor` normalization happen in one place.
+  3. Fresh environments no longer need an out-of-band `pytz` install for PIT/docs examples because timezone support is declared in package metadata.
+
 ### Version 2.1.0
 
 - **Date:** 2026-03-10

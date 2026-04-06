@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pandas as pd
 
 if TYPE_CHECKING:
-    from alphaforge.pit.release_rules import ReleaseRule
+    from alphaforge.time.release_rules import ReleaseRule
 
 PITMode = Literal["ALFRED_REALTIME", "DISCRETE_VINTAGES_SNAP", "NO_PIT"]
 

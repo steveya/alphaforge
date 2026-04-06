@@ -1,7 +1,7 @@
 # alphaforge/features/dataset_spec.py
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional, Sequence
 
 import pandas as pd
@@ -26,6 +26,10 @@ class TimeSpec:
     grid: str = "B"  # "B" daily business day grid; later can be richer
     asof: Optional[pd.Timestamp] = None  # optional global asof cut (PIT); can be None
 
+    def __post_init__(self) -> None:
+        if pd.Timestamp(self.start) > pd.Timestamp(self.end):
+            raise ValueError("TimeSpec.start must be <= TimeSpec.end.")
+
 
 @dataclass(frozen=True)
 class SliceOverride:
@@ -41,6 +45,28 @@ class SliceOverride:
     asof: Optional[pd.Timestamp] = None
 
 
+def _merge_slice_overrides(
+    parent: Optional["SliceOverride"],
+    child: Optional["SliceOverride"],
+) -> Optional["SliceOverride"]:
+    if parent is None:
+        return child
+    if child is None:
+        return parent
+    return SliceOverride(
+        lookback=child.lookback if child.lookback is not None else parent.lookback,
+        grid=child.grid if child.grid is not None else parent.grid,
+        asof=child.asof if child.asof is not None else parent.asof,
+    )
+
+
+def _compose_request_key(parent: Optional[str], child: Optional[str]) -> Optional[str]:
+    pieces = [piece for piece in (parent, child) if piece]
+    if not pieces:
+        return None
+    return "/".join(pieces)
+
+
 @dataclass(frozen=True)
 class FeatureRequest:
     """
@@ -54,6 +80,22 @@ class FeatureRequest:
     # New: arbitrary tags to annotate all features produced by this request.
     # These will be stamped into the FeatureFrame.catalog as both dict and JSON.
     tags: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FeatureRequestGroup:
+    """Composable group of feature requests with inherited metadata."""
+
+    requests: Sequence[FeatureRequest | "FeatureRequestGroup"] = field(
+        default_factory=tuple
+    )
+    slice_override: Optional[SliceOverride] = None
+    key: Optional[str] = None
+    tags: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.requests:
+            raise ValueError("FeatureRequestGroup.requests cannot be empty.")
 
 
 @dataclass(frozen=True)
@@ -78,6 +120,12 @@ class JoinPolicy:
     how: str = "inner"  # "inner" safest; "outer" allowed
     sort_index: bool = True
 
+    def __post_init__(self) -> None:
+        if self.how not in {"inner", "outer"}:
+            raise ValueError(
+                f"JoinPolicy.how must be 'inner' or 'outer', got {self.how!r}."
+            )
+
 
 @dataclass(frozen=True)
 class MissingnessPolicy:
@@ -87,19 +135,83 @@ class MissingnessPolicy:
 
     final_row_policy: str = "drop_if_any_nan"  # or "keep"
 
+    def __post_init__(self) -> None:
+        if self.final_row_policy not in {"drop_if_any_nan", "keep"}:
+            raise ValueError(
+                "MissingnessPolicy.final_row_policy must be "
+                f"'drop_if_any_nan' or 'keep', got {self.final_row_policy!r}."
+            )
+
+
+def _flatten_feature_requests(
+    features: Sequence[Any],
+    *,
+    inherited_slice_override: Optional[SliceOverride] = None,
+    inherited_key: Optional[str] = None,
+    inherited_tags: Optional[Dict[str, Any]] = None,
+) -> list[FeatureRequest]:
+    flat: list[FeatureRequest] = []
+    base_tags = dict(inherited_tags or {})
+
+    for item in features:
+        if isinstance(item, FeatureRequest):
+            merged_tags = dict(base_tags)
+            merged_tags.update(item.tags)
+            flat.append(
+                replace(
+                    item,
+                    slice_override=_merge_slice_overrides(
+                        inherited_slice_override,
+                        item.slice_override,
+                    ),
+                    key=_compose_request_key(inherited_key, item.key),
+                    tags=merged_tags,
+                )
+            )
+            continue
+
+        if isinstance(item, FeatureRequestGroup):
+            nested_tags = dict(base_tags)
+            nested_tags.update(item.tags)
+            flat.extend(
+                _flatten_feature_requests(
+                    item.requests,
+                    inherited_slice_override=_merge_slice_overrides(
+                        inherited_slice_override,
+                        item.slice_override,
+                    ),
+                    inherited_key=_compose_request_key(inherited_key, item.key),
+                    inherited_tags=nested_tags,
+                )
+            )
+            continue
+
+        raise TypeError(
+            "DatasetSpec.features must contain FeatureRequest or "
+            f"FeatureRequestGroup items, got {type(item)!r}."
+        )
+
+    return flat
+
 
 @dataclass(frozen=True)
 class DatasetSpec:
     universe: UniverseSpec
     time: TimeSpec
     target: TargetRequest
-    features: Sequence[FeatureRequest] = field(default_factory=list)
+    features: Sequence[FeatureRequest | FeatureRequestGroup] = field(
+        default_factory=list
+    )
 
     join_policy: JoinPolicy = field(default_factory=JoinPolicy)
     missingness: MissingnessPolicy = field(default_factory=MissingnessPolicy)
 
     name: str = "dataset"
     tags: Dict[str, Any] = field(default_factory=dict)
+
+    def feature_requests(self) -> list[FeatureRequest]:
+        """Return the flattened feature-request list used by the builder."""
+        return _flatten_feature_requests(self.features)
 
 
 @dataclass

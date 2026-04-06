@@ -24,15 +24,20 @@ _DEFAULT_METRICS = (
 def cot_to_pit_observations(
     df: pd.DataFrame,
     metrics: Sequence[str] | None = None,
+    *,
+    key_prefix: str = "cftc.cot.tff.",
+    source_name: str = "cftc_cot",
 ) -> pd.DataFrame:
     """Convert CFTC CoT fetch output to PIT observation rows.
 
     Parameters
     ----------
-    df : DataFrame from CFTCCoTSource.fetch() with columns:
+    df : DataFrame from a CFTC CoT source fetch() with columns:
         date (publication date, Friday), entity_id, long_positions,
         short_positions, open_interest.
     metrics : which series to emit.  Defaults to all five.
+    key_prefix : Prefix for generated ``series_key`` values.
+    source_name : Value for the output ``source`` column.
 
     Returns
     -------
@@ -66,6 +71,6 @@ def cot_to_pit_observations(
         obs_date_col="obs_date",
         asof_col="asof_utc",
         value_vars=chosen,
-        key_prefix="cftc.cot.tff.",
-        source_name="cftc_cot",
+        key_prefix=key_prefix,
+        source_name=source_name,
     )

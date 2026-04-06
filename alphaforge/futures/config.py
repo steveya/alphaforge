@@ -149,6 +149,8 @@ class FirstRateFuturesConfig:
                 "Missing required futures configuration values. "
                 f"Set them explicitly, via YAML, or via env vars: {joined}"
             )
+        assert resolved_source_dir is not None
+        assert resolved_artifact_root is not None
 
         return cls(
             source_dir=resolved_source_dir.resolve(),

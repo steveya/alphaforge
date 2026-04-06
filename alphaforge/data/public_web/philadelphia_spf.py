@@ -9,20 +9,18 @@ from pathlib import Path
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
+from .schema_helpers import table_schema
 from .utils import (
-    apply_query_filters,
     ensure_date_utc,
     make_entity_id,
-    project_columns,
     snake_case,
 )
 
 
-class PhiladelphiaSPFMeanLevelSource(DataSource):
+class PhiladelphiaSPFMeanLevelSource(PublicWebSourceBase):
     """Historical mean SPF forecasts from the Philadelphia Fed."""
 
     name: str = "philadelphia_spf"
@@ -56,14 +54,14 @@ class PhiladelphiaSPFMeanLevelSource(DataSource):
         workbook_url: str | None = None,
         release_url: str | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._workbook_url = workbook_url or self.WORKBOOK_URL
         self._release_url = release_url or self.RELEASE_URL
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["value"],
                 canonical_columns=[
                     "value",
@@ -72,8 +70,6 @@ class PhiladelphiaSPFMeanLevelSource(DataSource):
                     "survey_period",
                     "release_date",
                 ],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="Q",
                 time_semantics="point",
                 release_time_column="release_date",
@@ -200,18 +196,7 @@ class PhiladelphiaSPFMeanLevelSource(DataSource):
         ]
         frames = [frame for frame in frames if not frame.empty]
         if not frames:
-            return pd.DataFrame(
-                columns=[
-                    "date",
-                    "release_date",
-                    "survey_period",
-                    "sheet_name",
-                    "series_name",
-                    "value",
-                    "entity_id",
-                    "asof_utc",
-                ]
-            )
+            return self._empty_frame(self._schema())
 
         long = pd.concat(frames, ignore_index=True)
         if not release_calendar.empty:
@@ -231,15 +216,12 @@ class PhiladelphiaSPFMeanLevelSource(DataSource):
         return long.sort_values(["date", "sheet_name", "series_name"]).reset_index(drop=True)
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
         long = self._to_long()
-        long = apply_query_filters(long, q=q, time_col="date", entity_col="entity_id")
-        return project_columns(
+        return self._finalize(
             long,
-            required_columns=["value"],
-            requested_columns=q.columns,
-            time_col="date",
-            entity_col="entity_id",
+            q=q,
+            schema=self._schema(),
+            sort_by=["date", "sheet_name", "series_name"],
         )

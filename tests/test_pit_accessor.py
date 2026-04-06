@@ -45,6 +45,16 @@ def test_upsert_idempotency(tmp_path):
     assert count == len(df)
 
 
+def test_open_bootstraps_store_root(tmp_path):
+    pit = PITAccessor.open(tmp_path)
+    df = _sample_df()
+    pit.upsert_pit_observations(df)
+
+    snap = pit.get_snapshot("GDP", pd.Timestamp("2025-03-01", tz="UTC"))
+
+    assert snap.loc[pd.Timestamp("2024-12-31", tz="UTC")] == 1.1
+
+
 def test_snapshot_selection(tmp_path):
     pit = _make_accessor(tmp_path)
     df = _sample_df()

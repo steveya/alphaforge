@@ -7,7 +7,6 @@ with any :class:`~alphaforge.pit.adapters.base.PITAdapter` implementation.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -16,6 +15,7 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 
 from alphaforge.pit.adapters.base import PITAdapter
+from alphaforge.time.ref_period import RefFreq, RefPeriod, coerce_ref_period
 
 if TYPE_CHECKING:
     from alphaforge.pit.catalog import SeriesCatalog
@@ -51,27 +51,7 @@ class TargetPolicy:
 # ---------------------------------------------------------------------------
 
 
-def _quarter_end_from_string(ref_quarter: str) -> date:
-    """Parse ``YYYYQn`` and return the calendar quarter-end date."""
-    match = re.match(r"^(\d{4})[Qq](\d+)$", str(ref_quarter).strip())
-    if not match:
-        raise ValueError(f"Expected quarterly reference in format YYYYQn, got {ref_quarter!r}")
-    year = int(match.group(1))
-    quarter = int(match.group(2))
-    if quarter not in {1, 2, 3, 4}:
-        raise ValueError(f"Invalid quarter: {quarter}. Must be 1, 2, 3, or 4")
-    month = quarter * 3
-    # Calendar quarter-end day
-    if month in {3, 12}:
-        day = 31
-    elif month in {6, 9}:
-        day = 30
-    else:  # pragma: no cover — unreachable for valid quarters
-        raise ValueError(f"Invalid quarter month: {month}")
-    return date(year, month, day)
-
-
-def quarter_end_date(ref_quarter: str | pd.Period) -> date:
+def quarter_end_date(ref_quarter: str | pd.Period | RefPeriod) -> date:
     """Return the quarter-end date for a reference quarter.
 
     Args:
@@ -84,30 +64,34 @@ def quarter_end_date(ref_quarter: str | pd.Period) -> date:
     Raises:
         ValueError: If the reference quarter does not match ``YYYYQn``.
     """
-    return _quarter_end_from_string(str(ref_quarter))
+    try:
+        return coerce_ref_period(ref_quarter, freq=RefFreq.Q).end_obs_date().date()
+    except ValueError as exc:
+        raise ValueError(
+            f"Expected quarterly reference in format YYYYQn, got {ref_quarter!r}"
+        ) from exc
 
 
-def quarter_start_date(ref_quarter: str | pd.Period) -> date:
+def quarter_start_date(ref_quarter: str | pd.Period | RefPeriod) -> date:
     """Return the quarter-start date for a reference quarter."""
-    quarter_end = quarter_end_date(ref_quarter)
-    if quarter_end.month == 3:
-        return date(quarter_end.year, 1, 1)
-    if quarter_end.month == 6:
-        return date(quarter_end.year, 4, 1)
-    if quarter_end.month == 9:
-        return date(quarter_end.year, 7, 1)
-    return date(quarter_end.year, 10, 1)
+    try:
+        return coerce_ref_period(ref_quarter, freq=RefFreq.Q).start_obs_date().date()
+    except ValueError as exc:
+        raise ValueError(
+            f"Expected quarterly reference in format YYYYQn, got {ref_quarter!r}"
+        ) from exc
 
 
 def quarter_obs_date(
-    ref_quarter: str | pd.Period, obs_date_anchor: Literal["end", "start"] = "end"
+    ref_quarter: str | pd.Period | RefPeriod,
+    obs_date_anchor: Literal["end", "start"] = "end",
 ) -> date:
     """Return the quarter observation date under the configured anchor policy."""
-    if obs_date_anchor == "end":
-        return quarter_end_date(ref_quarter)
-    if obs_date_anchor == "start":
-        return quarter_start_date(ref_quarter)
-    raise ValueError(f"obs_date_anchor must be 'end' or 'start', got {obs_date_anchor}")
+    return (
+        coerce_ref_period(ref_quarter, freq=RefFreq.Q)
+        .obs_date(anchor=obs_date_anchor)
+        .date()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +112,10 @@ def resolve_target_obs_date_anchor(
     2. ``"auto"`` uses catalog metadata ``obs_date_anchor`` for the target series.
     3. If metadata is missing/unknown, fallback is ``"end"``.
     """
-    if target_obs_date_anchor in {"start", "end"}:
-        return target_obs_date_anchor  # type: ignore[return-value]
+    if target_obs_date_anchor == "start":
+        return "start"
+    if target_obs_date_anchor == "end":
+        return "end"
     if target_obs_date_anchor != "auto":
         raise ValueError(
             f"target_obs_date_anchor must be one of 'auto', 'start', 'end', got "
@@ -137,8 +123,10 @@ def resolve_target_obs_date_anchor(
         )
     if catalog is not None:
         meta = catalog.get(target_series_key)
-        if meta is not None and meta.obs_date_anchor in {"start", "end"}:
-            return meta.obs_date_anchor  # type: ignore[return-value]
+        if meta is not None and meta.obs_date_anchor == "start":
+            return "start"
+        if meta is not None and meta.obs_date_anchor == "end":
+            return "end"
     return "end"
 
 
@@ -204,7 +192,7 @@ def list_quarterly_target_releases_asof_multi(
             }
         )
         try:
-            releases = adapter.list_pit_observations_asof_multi(requests)  # type: ignore[attr-defined]
+            releases = adapter.list_pit_observations_asof_multi(requests)
         except NotImplementedError:
             releases = pd.DataFrame()
         out: dict[str, pd.DataFrame] = {}

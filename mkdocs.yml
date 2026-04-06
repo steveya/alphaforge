@@ -39,12 +39,19 @@ nav:
       - "Quickstart: Dataset": getting-started/quickstart-dataset.md
       - "Quickstart: Public Web": getting-started/quickstart-public-web.md
   - Guides:
+      - Core Platform Architecture: guides/core-platform-architecture.md
+      - Core Platform Migration: guides/core-platform-migration.md
+      - Core Platform Contracts And Benchmarks: guides/contracts-and-benchmarks.md
       - Dataset Spec: guides/dataset-spec.md
       - Data Sources: guides/data-sources.md
+      - Source Operations: guides/source-operations.md
       - First Rate Futures: guides/first-rate-futures.md
       - PIT Data: guides/pit.md
+      - Research Recipes: guides/research-recipes.md
+      - Temporal Semantics: guides/temporal-semantics.md
       - PIT API Contract: guides/pit-api-contract.md
       - PIT Migrations: guides/pit-migrations.md
+      - Public Web Source Authoring: guides/public-web-source-authoring.md
       - Development: guides/development.md
   - API:
       - Package: api/package.md
@@ -54,12 +61,15 @@ nav:
       - Data Transforms: api/transforms.md
       - Dataset Builder: api/dataset-builder.md
       - Dataset Spec: api/dataset-spec.md
+      - Market Templates: api/market-templates.md
       - PIT Accessor: api/pit-accessor.md
-      - PIT Release Rules: api/pit-release-rules.md
+      - PIT Ref Queries: api/pit-queries.md
+      - Time Release Rules: api/pit-release-rules.md
+      - Time Ref Periods: api/time-ref-period.md
       - PIT Vintage Views: api/pit-views.md
       - PIT Vintage Resolvers: api/pit-resolvers.md
       - PIT Panel Builder: api/pit-panel.md
-      - PIT Missingness: api/pit-missingness.md
+      - Time Missingness: api/pit-missingness.md
       - PIT Vintage Utilities: api/pit-vintage.md
       - PIT Transforms: api/pit-transforms.md
       - PIT Pipelines: api/pit-pipelines.md

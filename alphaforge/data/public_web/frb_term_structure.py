@@ -9,20 +9,18 @@ from pathlib import Path
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
+from .schema_helpers import table_schema
 from .utils import (
-    apply_query_filters,
     bucket_tenor,
     ensure_date_utc,
     make_entity_id,
-    project_columns,
 )
 
 
-class FRBTermStructureBenchmarkSource(DataSource):
+class FRBTermStructureBenchmarkSource(PublicWebSourceBase):
     """Federal Reserve Board Kim-Wright three-factor benchmark series."""
 
     name: str = "frb_term_structure"
@@ -40,17 +38,15 @@ class FRBTermStructureBenchmarkSource(DataSource):
         cache_dir: str | Path | None = None,
         csv_url: str | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._csv_url = csv_url or self.CSV_URL
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["value"],
                 canonical_columns=["value", "mnemonic", "category", "maturity_years"],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="B",
                 time_semantics="point",
             )
@@ -82,17 +78,7 @@ class FRBTermStructureBenchmarkSource(DataSource):
 
     def _to_long(self, raw: pd.DataFrame) -> pd.DataFrame:
         if raw.empty:
-            return pd.DataFrame(
-                columns=[
-                    "date",
-                    "mnemonic",
-                    "category",
-                    "maturity_years",
-                    "value",
-                    "entity_id",
-                    "asof_utc",
-                ]
-            )
+            return self._empty_frame(self._schema())
 
         date_column = raw.columns[0]
         long = raw.rename(columns={date_column: "date"}).melt(
@@ -123,18 +109,10 @@ class FRBTermStructureBenchmarkSource(DataSource):
         return long.sort_values(["date", "mnemonic"]).reset_index(drop=True)
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
         long = self._to_long(self._load_raw())
-        long = apply_query_filters(long, q=q, time_col="date", entity_col="entity_id")
-        return project_columns(
-            long,
-            required_columns=["value"],
-            requested_columns=q.columns,
-            time_col="date",
-            entity_col="entity_id",
-        )
+        return self._finalize(long, q=q, schema=self._schema(), sort_by=["date", "mnemonic"])
 
     def fetch_wide(self, q: Query, *, category: str | None = None) -> pd.DataFrame:
         df = self.fetch(

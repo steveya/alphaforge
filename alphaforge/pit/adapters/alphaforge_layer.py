@@ -9,9 +9,10 @@ from typing import Any
 import pandas as pd
 
 from alphaforge.data.context import DataContext
-from alphaforge.pit.transforms import PITTransformResult, PITTransformSpec
+from alphaforge.pit.accessor import PITAccessor
+from alphaforge.pit.transforms import EngineMismatchPolicy, PITTransformResult, PITTransformSpec
 from alphaforge.pit.utils.timestamps import coerce_utc_timestamp, normalize_utc_day
-from alphaforge.time.ref_period import RefFreq, RefPeriod
+from alphaforge.time.ref_period import RefFreq, coerce_ref_period
 
 
 class AlphaForgePITLayer:
@@ -21,6 +22,7 @@ class AlphaForgePITLayer:
         if ctx.pit is None:
             raise ValueError("PIT requires DuckDBParquetStore-backed DataContext")
         self._ctx = ctx
+        self._pit: PITAccessor = ctx.pit
 
     def snapshot(
         self,
@@ -29,7 +31,7 @@ class AlphaForgePITLayer:
         start: pd.Timestamp | None = None,
         end: pd.Timestamp | None = None,
     ) -> pd.Series:
-        return self._ctx.pit.get_snapshot(series_key, asof=asof, start=start, end=end)
+        return self._pit.get_snapshot(series_key, asof=asof, start=start, end=end)
 
     def snapshot_multi(
         self,
@@ -39,9 +41,7 @@ class AlphaForgePITLayer:
         start: pd.Timestamp | None = None,
         end: pd.Timestamp | None = None,
     ) -> pd.DataFrame:
-        if self._ctx.pit is None:
-            raise ValueError("PIT store is not available; cannot query snapshots.")
-        return self._ctx.pit.get_snapshot_multi(
+        return self._pit.get_snapshot_multi(
             list(series_keys),
             asof=asof,
             start=start,
@@ -52,16 +52,16 @@ class AlphaForgePITLayer:
         self,
         series_key: str,
         asof: pd.Timestamp,
-        start_ref: str | RefPeriod | None = None,
-        end_ref: str | RefPeriod | None = None,
+        start_ref: object | None = None,
+        end_ref: object | None = None,
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        if isinstance(start_ref, str):
-            start_ref = RefPeriod.parse(start_ref)
-        if isinstance(end_ref, str):
-            end_ref = RefPeriod.parse(end_ref)
-        return self._ctx.pit.get_snapshot_ref(
+        if start_ref is not None:
+            start_ref = coerce_ref_period(start_ref, freq=freq)
+        if end_ref is not None:
+            end_ref = coerce_ref_period(end_ref, freq=freq)
+        return self._pit.get_snapshot_ref(
             series_key,
             asof=asof,
             start_ref=start_ref,
@@ -76,7 +76,7 @@ class AlphaForgePITLayer:
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
     ) -> pd.Series:
-        return self._ctx.pit.get_revision_timeline(
+        return self._pit.get_revision_timeline(
             series_key, obs_date=obs_date, start_asof=start_asof, end_asof=end_asof
         )
 
@@ -87,30 +87,29 @@ class AlphaForgePITLayer:
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
     ) -> pd.DataFrame:
-        return self._ctx.pit.get_revision_path(
+        return self._pit.get_revision_path(
             series_key, obs_date=obs_date, start_asof=start_asof, end_asof=end_asof
         )
 
     def revision_path_multi(self, requests: pd.DataFrame) -> pd.DataFrame:
-        return self._ctx.pit.get_revision_path_multi(requests)
+        return self._pit.get_revision_path_multi(requests)
 
     def revisions_ref(
         self,
         series_key: str,
-        ref: str | RefPeriod,
+        ref: object,
         start_asof: pd.Timestamp | None = None,
         end_asof: pd.Timestamp | None = None,
         *,
         freq: RefFreq | None = None,
     ) -> pd.Series:
-        if isinstance(ref, str):
-            ref = RefPeriod.parse(ref)
-        return self._ctx.pit.get_revision_timeline_ref(
+        ref = coerce_ref_period(ref, freq=freq)
+        return self._pit.get_revision_timeline_ref(
             series_key, ref=ref, start_asof=start_asof, end_asof=end_asof, freq=freq
         )
 
     def upsert(self, df: pd.DataFrame) -> None:
-        self._ctx.pit.upsert_pit_observations(df)
+        self._pit.upsert_pit_observations(df)
 
     def apply_transform(
         self,
@@ -119,9 +118,9 @@ class AlphaForgePITLayer:
         overwrite: bool = False,
         persist: bool = True,
         allow_experimental: bool = False,
-        on_engine_mismatch: str = "error",
+        on_engine_mismatch: EngineMismatchPolicy = "error",
     ) -> PITTransformResult:
-        return self._ctx.pit.apply_transform(
+        return self._pit.apply_transform(
             spec,
             overwrite=overwrite,
             persist=persist,
@@ -134,9 +133,9 @@ class AlphaForgePITLayer:
         spec: PITTransformSpec | dict[str, Any],
         *,
         allow_experimental: bool = False,
-        on_engine_mismatch: str = "error",
+        on_engine_mismatch: EngineMismatchPolicy = "error",
     ) -> dict[str, Any]:
-        return self._ctx.pit.explain_transform(
+        return self._pit.explain_transform(
             spec,
             allow_experimental=allow_experimental,
             on_engine_mismatch=on_engine_mismatch,
@@ -149,9 +148,7 @@ class AlphaForgePITLayer:
         obs_date: date,
         asof_date: date,
     ) -> pd.DataFrame:
-        if self._ctx.pit is None:
-            raise ValueError("PIT store is not available; cannot list PIT observations.")
-        conn = self._ctx.pit.conn
+        conn = self._pit.conn
         obs_day = normalize_utc_day(obs_date)
         asof_cutoff = coerce_utc_timestamp(asof_date).normalize() + pd.Timedelta(days=1)
         df = conn.execute(

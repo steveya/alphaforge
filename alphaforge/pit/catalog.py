@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from alphaforge.pit.observation import SeriesMetadata
-from alphaforge.pit.release_rules import ReleaseRule
+from alphaforge.time.release_rules import ReleaseRule
 
 
 class SeriesCatalog:

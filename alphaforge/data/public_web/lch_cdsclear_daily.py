@@ -5,22 +5,20 @@ from pathlib import Path
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
 from .http import CachedHttpClient
-from .parsing import parse_html_tables
-from .utils import (
-    apply_query_filters,
-    ensure_date_utc,
-    first_existing,
-    make_entity_id,
-    project_columns,
-    to_float,
+from .schema_helpers import table_schema
+from .tabular import (
+    TabularDocumentSourceBase,
+    candidate_tables,
+    resolved_date_series,
+    resolved_numeric_series,
+    resolved_text_series,
 )
+from .utils import make_entity_id
 
 
-class LCHCDSClearDailySource(DataSource):
+class LCHCDSClearDailySource(TabularDocumentSourceBase):
     name: str = "lch_cdsclear_daily"
     TABLE = "lch.cdsclear.daily"
     URL = "https://www.lseg.com/en/post-trade/clearing/lch-services/cdsclear/volumes"
@@ -33,92 +31,67 @@ class LCHCDSClearDailySource(DataSource):
         cache_dir: str | Path | None = None,
     ) -> None:
         self._volumes_url = volumes_url or self.URL
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["value"],
                 canonical_columns=["value", "metric", "segment"],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="D",
                 time_semantics="point",
             )
         }
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
+        schema = self._schema()
+        asof_utc = self._asof_utc(q)
+        snapshot_date = self._snapshot_date(q)
 
-        payload = self._http.get_bytes(
+        tables = self._read_html_tables(
             url=self._volumes_url,
             source="lch_cdsclear_daily",
             artifact_name=Path(self._volumes_url.split("?")[0]).name or "volumes.html",
         )
-        tables = parse_html_tables(payload)
 
         rows: list[pd.DataFrame] = []
-        for table in tables:
-            if not ({"value", "volume", "notional", "trades"} & set(table.columns)):
-                continue
-
+        for table in candidate_tables(
+            tables,
+            any_of=("value", "volume", "notional", "trades"),
+        ):
             out = pd.DataFrame(index=table.index)
-            date_col = first_existing(table, "date", "trading_day")
-            out["date"] = (
-                ensure_date_utc(table[date_col])
-                if date_col
-                else pd.Timestamp.now(tz="UTC").normalize()
+            out["date"] = resolved_date_series(
+                table,
+                ["date", "trading_day"],
+                default_date=snapshot_date,
             )
-
-            metric_col = first_existing(table, "metric")
-            segment_col = first_existing(table, "segment", "family", "index_family")
-            out["metric"] = (
-                table[metric_col]
-                .astype(str)
-                .str.lower()
-                .str.replace(" ", "_", regex=False)
-                if metric_col
-                else "volume"
+            out["metric"] = resolved_text_series(
+                table,
+                ["metric"],
+                default="volume",
+                case="lower",
+                space_replacement="_",
             )
-            out["segment"] = (
-                table[segment_col]
-                .astype(str)
-                .str.lower()
-                .str.replace(" ", "_", regex=False)
-                if segment_col
-                else "all"
+            out["segment"] = resolved_text_series(
+                table,
+                ["segment", "family", "index_family"],
+                default="all",
+                case="lower",
+                space_replacement="_",
             )
-
-            value_col = first_existing(table, "value", "volume", "notional", "trades")
-            out["value"] = to_float(table[value_col]) if value_col else pd.NA
+            out["value"] = resolved_numeric_series(
+                table,
+                ["value", "volume", "notional", "trades"],
+            )
 
             out["entity_id"] = [
                 make_entity_id("credit", "cds", seg, metric, "lch")
                 for seg, metric in zip(out["segment"], out["metric"])
             ]
-            out["asof_utc"] = pd.Timestamp.now(tz="UTC")
+            out["asof_utc"] = asof_utc
             rows.append(out)
 
-        schema = self.schemas()[self.TABLE]
-        if not rows:
-            return pd.DataFrame(
-                columns=[
-                    schema.time_column,
-                    schema.entity_column,
-                    "asof_utc",
-                    *schema.required_columns,
-                ]
-            )
-
-        out = pd.concat(rows, ignore_index=True)
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
-        )
-        return out.reset_index(drop=True)
+        out = pd.concat(rows, ignore_index=True) if rows else self._empty_frame(schema)
+        return self._finalize(out, q=q, schema=schema, sort_by=[])

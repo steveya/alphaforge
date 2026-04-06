@@ -5,7 +5,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alphaforge import Query
 from alphaforge.futures import (
     FirstRateFuturesConfig,
     FirstRateFuturesLoader,
@@ -187,14 +186,12 @@ def test_context_adapter_reads_manifest_and_fetches_data(tmp_path) -> None:
 
     assert adapter.list_entities("futures.continuous_eod_research") == ["ES"]
 
-    result = ctx.fetch(
-        Query(
-            table="futures.continuous_eod_research",
-            columns=["close", "active_contract_id"],
-            entities=["ES"],
-            start="2024-06-17T00:00:00Z",
-            end="2024-06-21T00:00:00Z",
-        )
+    result = ctx.load(
+        "futures.continuous_eod_research",
+        columns=["close", "active_contract_id"],
+        entities=["ES"],
+        start="2024-06-17T00:00:00Z",
+        end="2024-06-21T00:00:00Z",
     )
 
     assert result.dataset == "futures.continuous_eod_research"

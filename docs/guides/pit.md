@@ -9,6 +9,36 @@ Alphaforge PIT provides:
 5. Revision/staleness helpers (`alphaforge.pit.tasks`)
 6. Model-importance attribution back to dataset source fields and request tags
 
+The semantic vocabulary for release timing and missingness is now anchored in
+[`alphaforge.time`](temporal-semantics.md). PIT keeps compatibility imports for
+those types, but the canonical public path is the time package.
+
+Ref-period semantics now route through that same layer. PIT ref helpers share
+one normalization path for canonical ref keys, pandas `Period` inputs, and
+explicit observation dates plus declared frequency/anchor semantics.
+
+## Minimal bootstrap
+
+The shortest supported local bootstrap is:
+
+```python
+import pandas as pd
+
+from alphaforge import PITAccessor
+
+pit = PITAccessor.open("./alphaforge_store")
+```
+
+That opens the DuckDB-backed PIT store at the given root and ensures the PIT
+tables exist.
+
+Minimal snapshot and revision-history reads then look like:
+
+```python
+snap = pit.get_snapshot("GDP", pd.Timestamp("2025-03-01", tz="UTC"))
+timeline = pit.get_revision_timeline("GDP", pd.Timestamp("2024-12-31", tz="UTC"))
+```
+
 ## Canonical PIT schema
 
 | Column | Type | Notes |
@@ -52,6 +82,67 @@ record = pit.resolve_release(
     asof=pd.Timestamp(\"2025-03-31\", tz=\"UTC\"),
 )
 ```
+
+Equivalent typed ref input also works:
+
+```python
+stream = pit.list_release_stream("GDP", pd.Period("2024Q4", freq="Q"))
+```
+
+## First-class ref-period queries
+
+`PITAccessor` now exposes typed ref-period query objects for the common
+snapshot and revision workflows:
+
+```python
+from alphaforge import PITAccessor, RefFreq, RefRevisionQuery, RefSnapshotQuery
+
+snap = pit.snapshot_ref(
+    RefSnapshotQuery(
+        series_key="GDP",
+        asof=pd.Timestamp("2025-06-01", tz="UTC"),
+        start_ref="2024Q4",
+        end_ref="2025Q1",
+    )
+)
+
+revisions = pit.revisions_ref(
+    RefRevisionQuery(
+        series_key="GDP",
+        ref="2024Q4",
+        end_asof=pd.Timestamp("2025-03-01", tz="UTC"),
+    )
+)
+```
+
+Key semantics:
+
+- `snapshot_ref(...)` returns a `Series` indexed by typed `RefPeriod` values
+  instead of raw observation timestamps.
+- `revisions_ref(...)` keeps an `asof_utc` index and names the output with the
+  canonical ref-entity id form, for example `GDP|2024Q4`.
+- both query types accept canonical ref keys, pandas `Period` objects, or
+  explicit observation dates plus declared `freq` and `obs_date_anchor`
+  semantics.
+
+Example with start-anchored monthly observations:
+
+```python
+snap = pit.snapshot_ref(
+    RefSnapshotQuery(
+        series_key="CPI",
+        asof=pd.Timestamp("2025-03-01", tz="UTC"),
+        start_ref="2025-01-01",
+        end_ref="2025-02-01",
+        freq=RefFreq.M,
+        obs_date_anchor="start",
+    )
+)
+```
+
+The older `get_snapshot_ref(...)` and `get_revision_timeline_ref(...)` methods
+remain available during migration, but the query-object APIs above are the
+preferred public path.
 
 ## Transform API
 
@@ -382,7 +473,83 @@ panel = pit.build_snapshot_panel(
     align=\"month_end\",
     join=\"outer\",
 )
+
+panel_long = pit.build_snapshot_panel_long(
+    [
+        {"series_key": "GDP", "alias": "gdp"},
+        {"series_key": "CPI", "alias": "cpi", "release_policy": "latest"},
+    ],
+    asof=pd.Timestamp("2025-06-30", tz="UTC"),
+    align="month_end",
+)
 ```
+
+`get_snapshot_multi(...)` now returns `source_asof_utc` alongside the snapshot
+values, and `build_snapshot_panel_long(...)` preserves both:
+
+- aligned `obs_date`
+- original `source_obs_date`
+- `source_asof_utc`
+
+This makes downstream panel assembly explicitly causal instead of forcing
+repo-local loops to reconstruct which vintage supplied each panel row.
+
+`SnapshotSeriesSpec` also accepts `freq` and `obs_date_anchor` so ref-period
+bounded panel requests can express period-start keyed series without ad hoc
+timestamp normalization:
+
+```python
+panel_long = pit.build_snapshot_panel_long(
+    [
+        {
+            "series_key": "CPI",
+            "alias": "cpi",
+            "start_ref": "2025-01-01",
+            "end_ref": "2025-02-01",
+            "freq": "M",
+            "obs_date_anchor": "start",
+        }
+    ],
+    asof=pd.Timestamp("2025-03-01", tz="UTC"),
+)
+```
+
+## Lineage and causal diagnostics
+
+Derived PIT series can now be inspected directly from storage without manually
+parsing `meta_json` payloads:
+
+```python
+lineage = pit.get_series_lineage("GDP_MINUS_CPI")
+summary = pit.explain_series("GDP_MINUS_CPI")
+```
+
+`get_series_lineage(...)` returns row-level provenance with fields such as:
+
+- `lineage_kind`
+- `transform_id`
+- `graph_id`
+- `input_series_keys`
+- `source_asof_utc`
+- `source_asof_by_series_utc`
+- `max_source_asof_utc`
+- `causality_status`
+
+`explain_series(...)` rolls that up into a series-level summary:
+
+- which transforms or expression graphs produced the series
+- which input series keys were used
+- whether the persisted lineage is causally safe under the stored `asof_utc`
+  semantics
+- whether the lineage is raw, transform-derived, or expression-graph-derived
+
+Current `causality_status` values are:
+
+- `raw`
+- `ok`
+- `unknown`
+- `violation`
+- `experimental`
 
 ## Engine contract
 
@@ -410,6 +577,11 @@ Available in `alphaforge.pit.tasks`:
 - `age_days`
 
 ## PITDataSource integration
+
+`PITDataSource` is the legacy/raw-loader bridge for exposing PIT storage
+through the `DataSource` contract. Prefer `PITAccessor` directly for canonical
+PIT querying; use `PITDataSource` when an older panel-oriented integration
+still expects the `DataSource` shape.
 
 `PITDataSource` exposes two tables:
 

@@ -25,19 +25,17 @@ import numpy as np
 import pandas as pd
 
 from alphaforge.data.query import Query
-from alphaforge.data.schema import TableSchema
-from alphaforge.data.source import DataSource
 
+from .base import PublicWebSourceBase
 from .http import CachedHttpClient
+from .schema_helpers import table_schema
 from .utils import (
-    apply_query_filters,
     ensure_date_utc,
     make_entity_id,
-    project_columns,
 )
 
 
-class MOFJGBYieldCurveSource(DataSource):
+class MOFJGBYieldCurveSource(PublicWebSourceBase):
     """Daily JGB constant-maturity par yields from the MOF website."""
 
     name: str = "mof_jgb_yields"
@@ -58,24 +56,22 @@ class MOFJGBYieldCurveSource(DataSource):
         csv_url: str | None = None,
         landing_url: str | None = None,
     ) -> None:
-        self._http = http_client or CachedHttpClient(cache_dir=cache_dir)
+        super().__init__(http_client=http_client, cache_dir=cache_dir)
         self._csv_url = csv_url or self.CURRENT_CSV_URL
         self._landing_url = landing_url or self.LANDING_URL
 
     # ---- schema --------------------------------------------------------------
 
-    def schemas(self) -> dict[str, TableSchema]:
+    def schemas(self):
         return {
-            self.TABLE: TableSchema(
-                name=self.TABLE,
+            self.TABLE: table_schema(
+                self.TABLE,
                 required_columns=["yield_pct"],
                 canonical_columns=[
                     "yield_pct",
                     "tenor",
                     "maturity_years",
                 ],
-                entity_column="entity_id",
-                time_column="date",
                 native_freq="B",
                 time_semantics="point",
             )
@@ -263,18 +259,9 @@ class MOFJGBYieldCurveSource(DataSource):
     # ---- fetch ---------------------------------------------------------------
 
     def fetch(self, q: Query) -> pd.DataFrame:
-        if q.table != self.TABLE:
-            raise ValueError(f"Unknown table: {q.table}")
+        self._require_table(q)
 
-        schema = self.schemas()[self.TABLE]
-        empty = pd.DataFrame(
-            columns=[
-                schema.time_column,
-                schema.entity_column,
-                "asof_utc",
-                *schema.required_columns,
-            ]
-        )
+        schema = self._schema()
 
         frames: list[pd.DataFrame] = []
         for url in self._discover_csv_urls():
@@ -293,18 +280,10 @@ class MOFJGBYieldCurveSource(DataSource):
                 continue
 
         if not frames:
-            return empty
+            return self._empty_frame(schema)
 
         out = pd.concat(frames, ignore_index=True)
-        out = apply_query_filters(out, q=q, time_col="date", entity_col="entity_id")
-        out = project_columns(
-            out,
-            required_columns=schema.required_columns,
-            requested_columns=q.columns,
-            time_col=schema.time_column,
-            entity_col=schema.entity_column,
-        )
-        return out.reset_index(drop=True)
+        return self._finalize(out, q=q, schema=schema, sort_by=[])
 
     # ---- convenience ---------------------------------------------------------
 
