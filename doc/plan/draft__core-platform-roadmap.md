@@ -680,7 +680,7 @@ Status mirror last synced: `2026-04-05`
 
 These tickets should not be picked up until their migration trigger conditions
 are satisfied. The detailed cleanup backlog lives in
-`doc/plan/post_migration_plan.md`.
+`doc/plan/active__post-migration-plan.md`.
 
 | Ticket | Status |
 | --- | --- |

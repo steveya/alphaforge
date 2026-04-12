@@ -73,7 +73,7 @@ Also rerun the targeted subsystem tests for the touched layer and update the
 repo-local migration notes:
 
 - `doc/plan/migration_note.md`
-- `doc/plan/post_migration_plan.md` when a temporary bridge is added or retired
+- `doc/plan/active__post-migration-plan.md` when a temporary bridge is added or retired
 
 ## Documentation expectations
 
@@ -82,7 +82,7 @@ When a migration-sensitive ticket lands:
 - update the canonical docs first
 - leave legacy paths documented only as temporary compatibility notes
 - record the downstream impact in `doc/plan/migration_note.md`
-- keep the roadmap mirror in `doc/plan/core_platform_roadmap.md` aligned with
+- keep the roadmap mirror in `doc/plan/draft__core-platform-roadmap.md` aligned with
   Linear state
 
 That keeps downstream migrations tied to one canonical direction at a time.

@@ -17,12 +17,12 @@ focus on:
 - temporary shims and planned removals
 
 This note complements the roadmap in
-`doc/plan/core_platform_roadmap.md`. The roadmap explains what the program is
+`doc/plan/draft__core-platform-roadmap.md`. The roadmap explains what the program is
 trying to build; this file records what changed and what downstream users need
 to know.
 
 Post-migration cleanup items that should only happen after downstream repos are
-fully moved live in `doc/plan/post_migration_plan.md`.
+fully moved live in `doc/plan/active__post-migration-plan.md`.
 
 ## Downstream Repos To Watch
 
@@ -124,7 +124,7 @@ not be treated as equal long-term public directions:
 - defaulting to `DataSource` as the primary public loading abstraction
 
 Removal and cleanup of these bridges is tracked in
-`doc/plan/post_migration_plan.md` under `ALP-23` through `ALP-27`.
+`doc/plan/active__post-migration-plan.md` under `ALP-23` through `ALP-27`.
 
 ## Repo-By-Repo Migration Checklist
 
@@ -259,7 +259,7 @@ Promoted release-rule and missingness semantics into the core
 - `ALP-20` can now rely on the shared release-aware health vocabulary instead
   of inventing separate operational timing rules.
 - Shim removal after downstream migration is explicitly tracked in `ALP-23`
-  and mirrored in `doc/plan/post_migration_plan.md`.
+  and mirrored in `doc/plan/active__post-migration-plan.md`.
 
 ### 2026-04-04
 
@@ -348,7 +348,7 @@ instead of asking downstream code to reach into legacy-style accessor helpers.
 **Follow-up notes:**
 
 - Post-migration cleanup for the legacy helper names is tracked in `ALP-27`
-  and mirrored in `doc/plan/post_migration_plan.md`.
+  and mirrored in `doc/plan/active__post-migration-plan.md`.
 - `ALP-14` can build batch ref-period panel helpers on top of these typed query
   semantics instead of inventing another batch-only contract.
 
@@ -495,7 +495,7 @@ instead of looping one query at a time.
 - `ALP-16` should narrow the documented `DataSource` role even further now
   that the canonical fetch route is explicit and batch-capable.
 - Final removal of the legacy context access path remains tracked in `ALP-25`
-  and mirrored in `doc/plan/post_migration_plan.md`.
+  and mirrored in `doc/plan/active__post-migration-plan.md`.
 
 ### 2026-04-04
 
@@ -830,7 +830,7 @@ repo-local roadmap and migration logs synchronized through the end of the epic.
 
 - No new compatibility shim or temporary bridge was introduced in this ticket.
 - Existing migration bridges remain tracked in
-  `doc/plan/post_migration_plan.md`.
+  `doc/plan/active__post-migration-plan.md`.
 
 **Follow-up notes:**
 

@@ -48,12 +48,18 @@ dtcc_daily = dtcc.fetch(
 cot_frame = cot.fetch(
     Query(
         table="cftc.cot.disagg",
-        columns=["value"],
-        entities=["wheat_srw"],
+        columns=["long_positions", "short_positions", "trader_category"],
+        entities=["futures.wheat_srw.m_money.cftc"],
         start=pd.Timestamp("2025-01-01", tz="UTC"),
     )
 )
 ```
+
+For raw public-web CoT loaders, `entities` uses the loader's raw `entity_id`
+contract rather than adapter `series_key` values. For
+`cftc.cot.disagg`, the canonical pattern is
+`futures.{contract_code}.{trader_category}.cftc`, for example
+`futures.wheat_srw.m_money.cftc`.
 
 If you instantiate a source directly instead of using
 `default_public_web_sources()`, keep constructor-specific requirements explicit.
