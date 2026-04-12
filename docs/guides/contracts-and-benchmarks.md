@@ -85,7 +85,7 @@ Before removing a compatibility surface or tightening a public contract:
 2. run `python -m pytest tests/contracts`
 3. rerun `python -m benchmarks.pit` if the change touches PIT retrieval paths
 4. update `doc/plan/migration_note.md` with the downstream impact
-5. update `doc/plan/post_migration_plan.md` if a temporary bridge was added
+5. update `doc/plan/active__post-migration-plan.md` if a temporary bridge was added
 
 That discipline keeps migration work anchored to explicit checks instead of
 repo-local assumptions.

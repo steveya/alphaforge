@@ -58,6 +58,13 @@ Archive-backed CFTC loaders now raise an explicit failure when a requested
 archive cannot be downloaded or parsed, rather than silently skipping the bad
 year and returning partial history.
 
+For the raw public-web CoT loaders, entity filtering uses the raw loader
+`entity_id` contract, not adapter `series_key` values. The disaggregated
+commodity loader `cftc.cot.disagg` uses entity ids of the form
+`futures.{contract_code}.{trader_category}.cftc` and exposes metric columns
+such as `long_positions`, `short_positions`, `spread_positions`,
+`open_interest`, `change_long`, and `change_short`.
+
 ### Outliers and provider-specific loaders
 
 | Source name | Class | Table(s) |

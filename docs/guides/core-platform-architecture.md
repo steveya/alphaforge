@@ -95,4 +95,4 @@ Use the canonical side for new work:
 | PIT ingestion strictness | `"error"`, `"warn"`, `"coerce"` | boolean `strict=True/False` |
 
 Those compatibility surfaces remain only to support downstream migration.
-Their removal backlog is tracked in `doc/plan/post_migration_plan.md`.
+Their removal backlog is tracked in `doc/plan/active__post-migration-plan.md`.
