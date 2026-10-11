@@ -6,9 +6,10 @@ SourceAdapterBase — Mixin providing default ``fetch_many`` and ``prefetch``.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Optional, Protocol, runtime_checkable
 
+from .contracts import DatasetContract, FetchPolicy, UnsupportedOperationError
 from .query import Query
 from .types import CacheManifest, FetchResult
 
@@ -54,7 +55,7 @@ class SourceAdapter(Protocol):
         """Batch fetch for multiple queries.
 
         Bulk adapters can optimize this (single cache lookup for all keys).
-        Per-series adapters parallelize individual ``fetch`` calls.
+        The default implementation fetches queries sequentially.
         """
         ...
 
@@ -65,13 +66,35 @@ class SourceAdapter(Protocol):
     ) -> CacheManifest:
         """Explicitly warm cache for a dataset.
 
-        Bulk adapters fetch the full dataset; per-series adapters may no-op.
+        Unsupported adapters raise UnsupportedOperationError.
         Returns a manifest describing what was cached.
         """
         ...
 
     def list_entities(self, dataset: str) -> list[str]:
         """Return available entity/series keys for a dataset."""
+        ...
+
+
+class PolicyAwareSourceAdapter(SourceAdapter, Protocol):
+    """Adapter capability for callers that explicitly supply fetch policies."""
+
+    def fetch(
+        self,
+        query: Query,
+        *,
+        max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
+    ) -> FetchResult:
+        ...
+
+    def fetch_many(
+        self,
+        queries: list[Query],
+        *,
+        max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
+    ) -> list[FetchResult]:
         ...
 
 
@@ -85,17 +108,24 @@ class SourceAdapterBase:
     - ``list_entities()``
 
     Default ``fetch_many`` iterates over queries calling ``fetch``.
-    Default ``prefetch`` returns an empty manifest.
+    Unsupported optional operations raise ``UnsupportedOperationError``.
     """
 
     source_name: str
     datasets: frozenset[str]
+
+    def describe(self, dataset: str) -> DatasetContract:
+        """Legacy/custom subclasses can add descriptors incrementally."""
+        if dataset not in self.datasets:
+            raise KeyError(f"Unknown dataset: {dataset!r}")
+        raise UnsupportedOperationError(f"{self.source_name} has no dataset descriptor")
 
     def fetch(
         self,
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         raise NotImplementedError
 
@@ -104,24 +134,21 @@ class SourceAdapterBase:
         queries: list[Query],
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> list[FetchResult]:
         """Default: iterate and call ``fetch`` for each query."""
-        return [self.fetch(q, max_staleness=max_staleness) for q in queries]
+        if policy is None:
+            # Preserve old third-party fetch signatures by default.
+            return [self.fetch(q, max_staleness=max_staleness) for q in queries]
+        return [self.fetch(q, max_staleness=max_staleness, policy=policy) for q in queries]
 
     def prefetch(
         self,
         dataset: str,
         asof_range: tuple[date, date] | None = None,
     ) -> CacheManifest:
-        """Default: no-op, returns empty manifest."""
-        return CacheManifest(
-            dataset=dataset,
-            source=self.source_name,
-            entity_keys=[],
-            asof_range=asof_range or (date.min, date.min),
-            populated_at=datetime.now(timezone.utc),
-            row_count=0,
-        )
+        """Unsupported warming must not look like an empty acquisition."""
+        raise UnsupportedOperationError(f"{self.source_name} does not support prefetch")
 
     def list_entities(self, dataset: str) -> list[str]:
-        raise NotImplementedError
+        raise UnsupportedOperationError(f"{self.source_name} does not support entity discovery")

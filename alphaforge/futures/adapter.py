@@ -8,6 +8,7 @@ from typing import Optional
 import pandas as pd
 
 from ..data.adapter import SourceAdapterBase
+from ..data.contracts import FetchPolicy, UnsupportedOperationError
 from ..data.query import Query
 from ..data.types import FetchResult
 
@@ -64,7 +65,10 @@ class FirstRateFuturesAdapter(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: Optional[object] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         del max_staleness
         spec = DATASET_SPECS.get(query.table)
         if spec is None:

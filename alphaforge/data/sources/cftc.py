@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..adapter import SourceAdapterBase
 from ..cache_layer import CacheLayer
+from ..contracts import FetchPolicy, UnsupportedOperationError
 from ..query import Query
 from ..transforms.cot_pit import cot_to_pit_observations
 from ..types import CacheManifest, FetchResult
@@ -90,8 +91,11 @@ class CFTCAdapter(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         """Fetch CoT data. First call triggers bulk fetch; subsequent use cache."""
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         dataset = query.table
         entities = list(query.entities or [])
 

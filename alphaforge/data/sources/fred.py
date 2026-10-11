@@ -17,6 +17,7 @@ import pandas as pd
 from ...pit.adapters.fred import FREDALFREDAdapter
 from ..adapter import SourceAdapterBase
 from ..cache_layer import CacheLayer
+from ..contracts import FetchPolicy, UnsupportedOperationError
 from ..query import Query
 from ..types import FetchResult
 
@@ -61,8 +62,11 @@ class FREDSourceAdapter(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         """Fetch PIT macro data for requested series."""
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         entities = list(query.entities or [])
         if not entities:
             return FetchResult(

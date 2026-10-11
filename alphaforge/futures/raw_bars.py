@@ -12,6 +12,7 @@ from pytz.exceptions import AmbiguousTimeError
 
 from ..data.adapter import SourceAdapterBase
 from ..data.context import DataContext
+from ..data.contracts import FetchPolicy, UnsupportedOperationError
 from ..data.query import Query
 from ..data.types import FetchResult
 from ..store.store import Store
@@ -149,7 +150,10 @@ class FirstRateBarsAdapter(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: object | None = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         del max_staleness
 
         if query.table not in self._dataset_roots:

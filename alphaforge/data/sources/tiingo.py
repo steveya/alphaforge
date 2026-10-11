@@ -16,6 +16,7 @@ import requests
 
 from ..adapter import SourceAdapterBase
 from ..cache_layer import CacheLayer
+from ..contracts import FetchPolicy, UnsupportedOperationError
 from ..query import Query
 from ..types import FetchResult
 
@@ -66,8 +67,11 @@ class TiingoAdapter(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         """Fetch OHLCV for requested tickers. Cache-aware."""
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         entities = list(query.entities or [])
         if not entities:
             return FetchResult(
