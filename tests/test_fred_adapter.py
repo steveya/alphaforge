@@ -206,5 +206,7 @@ class TestFREDAdapterMisc:
         assert isinstance(entities, list)
 
     def test_default_prefetch(self, adapter):
-        manifest = adapter.prefetch("macro.fred")
-        assert manifest.source == "fred"
+        from alphaforge.data.contracts import UnsupportedOperationError
+
+        with pytest.raises(UnsupportedOperationError):
+            adapter.prefetch("macro.fred")

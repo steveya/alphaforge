@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
@@ -10,6 +10,8 @@ from ..pit.accessor import PITAccessor
 from ..store.duckdb_parquet import DuckDBParquetStore
 from ..store.store import Store
 from ..time.calendar import TradingCalendar
+from .adapter import SourceAdapterBase
+from .contracts import DatasetContract, FetchPolicy, UnsupportedOperationError, resolve_fetch_policy
 from .panel import PanelFrame
 from .query import Query, VintageMode
 from .source import DataSource
@@ -34,8 +36,9 @@ class DataContext:
     store : Store
         Backing store for persistence.
     adapters : dict[str, SourceAdapter] | None
-        Canonical public data-loading surface keyed by source_name
-        (e.g. ``"cftc"``).
+        Canonical public data-loading surface keyed by registration name.
+        Positional ``from_adapters`` registration uses the provider source_name;
+        ``named_adapters`` can register multiple configurations of one provider.
     default_sources : dict[str, str] | None
         Maps dataset → default source_name for canonical adapter routing
         (e.g. ``{"cot.tff": "cftc"}``).
@@ -64,6 +67,7 @@ class DataContext:
         universe: Optional[Universe] = None,
         entity_meta: Optional[EntityMetadata] = None,
         default_sources: Optional[dict[str, str]] = None,
+        named_adapters: Mapping[str, "SourceAdapter"] | None = None,
     ) -> "DataContext":
         """Build a DataContext from adapters without manual mapping boilerplate."""
         adapter_map: dict[str, "SourceAdapter"] = {}
@@ -77,6 +81,15 @@ class DataContext:
             adapter_map[adapter.source_name] = adapter
             for dataset in adapter.datasets:
                 dataset_to_sources.setdefault(dataset, []).append(adapter.source_name)
+
+        for name, adapter in (named_adapters or {}).items():
+            if not name:
+                raise ValueError("Adapter registration names must not be empty")
+            if name in adapter_map:
+                raise ValueError(f"Duplicate adapter registration: {name!r}")
+            adapter_map[name] = adapter
+            for dataset in adapter.datasets:
+                dataset_to_sources.setdefault(dataset, []).append(name)
 
         derived_defaults = {
             dataset: sources[0]
@@ -226,10 +239,46 @@ class DataContext:
         *,
         source: Optional[str] = None,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> "FetchResult":
         """Canonical fetch path: resolve an adapter and delegate."""
         adapter = self._resolve_source(query.table, source)
-        return adapter.fetch(query, max_staleness=max_staleness)
+        resolve_fetch_policy(policy, max_staleness)
+        contract = self._declared_contract(adapter, query.table)
+        if contract is not None:
+            contract.validate_query(query)
+        if policy is None:
+            result = adapter.fetch(query, max_staleness=max_staleness)
+        else:
+            result = adapter.fetch(query, max_staleness=max_staleness, policy=policy)
+        if contract is not None:
+            contract.validate_result(query, result)
+        if not result.complete and (policy is None or not policy.allow_partial):
+            raise ValueError("Adapter returned a partial result without allow_partial")
+        return replace(result, adapter_name=self._registration_name(adapter, query.table, source))
+
+    def _registration_name(self, adapter: "SourceAdapter", dataset: str, source: str | None) -> str:
+        if source is not None:
+            return source
+        if self.default_sources and dataset in self.default_sources:
+            return self.default_sources[dataset]
+        return next(name for name, item in (self.adapters or {}).items() if item is adapter)
+
+    @staticmethod
+    def _declared_contract(adapter: "SourceAdapter", dataset: str) -> DatasetContract | None:
+        describe = getattr(adapter, "describe", None)
+        if describe is None or getattr(describe, "__func__", None) is SourceAdapterBase.describe:
+            # Compatibility: old third-party adapters have no declared guarantees.
+            return None
+        return describe(dataset)
+
+    def describe(self, dataset: str, *, source: str | None = None) -> DatasetContract:
+        """Inspect the resolved dataset without acquiring data."""
+        adapter = self._resolve_source(dataset, source)
+        contract = self._declared_contract(adapter, dataset)
+        if contract is None:
+            raise UnsupportedOperationError(f"{adapter.source_name} has no dataset descriptor")
+        return contract
 
     def load(
         self,
@@ -245,6 +294,7 @@ class DataContext:
         grid: Optional[str] = None,
         source: Optional[str] = None,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> "FetchResult":
         """Happy-path source load without explicit Query construction."""
         return self.fetch(
@@ -261,6 +311,7 @@ class DataContext:
             ),
             source=source,
             max_staleness=max_staleness,
+            policy=policy,
         )
 
     def fetch_many(
@@ -269,14 +320,19 @@ class DataContext:
         *,
         source: Optional[str] = None,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> list["FetchResult"]:
         """Canonical batch fetch path, grouped by resolved adapter."""
         if not queries:
             return []
+        resolve_fetch_policy(policy, max_staleness)
 
         grouped_queries: dict[int, tuple["SourceAdapter", list[tuple[int, Query]]]] = {}
         for idx, query in enumerate(queries):
             adapter = self._resolve_source(query.table, source)
+            contract = self._declared_contract(adapter, query.table)
+            if contract is not None:
+                contract.validate_query(query)
             adapter_key = id(adapter)
             if adapter_key not in grouped_queries:
                 grouped_queries[adapter_key] = (adapter, [])
@@ -285,17 +341,26 @@ class DataContext:
         results: list[Optional["FetchResult"]] = [None] * len(queries)
         for adapter, indexed_queries in grouped_queries.values():
             batch_queries = [query for _, query in indexed_queries]
-            batch_results = adapter.fetch_many(
-                batch_queries,
-                max_staleness=max_staleness,
-            )
+            if policy is None:
+                batch_results = adapter.fetch_many(batch_queries, max_staleness=max_staleness)
+            else:
+                batch_results = adapter.fetch_many(
+                    batch_queries, max_staleness=max_staleness, policy=policy,
+                )
             if len(batch_results) != len(batch_queries):
                 raise ValueError(
                     f"Adapter '{adapter.source_name}' returned {len(batch_results)} "
                     f"results for {len(batch_queries)} queries."
                 )
-            for (idx, _), result in zip(indexed_queries, batch_results):
-                results[idx] = result
+            for (idx, query), result in zip(indexed_queries, batch_results):
+                contract = self._declared_contract(adapter, query.table)
+                if contract is not None:
+                    contract.validate_result(query, result)
+                if not result.complete and (policy is None or not policy.allow_partial):
+                    raise ValueError("Adapter returned a partial result without allow_partial")
+                results[idx] = replace(
+                    result, adapter_name=self._registration_name(adapter, query.table, source),
+                )
 
         if any(result is None for result in results):
             raise ValueError("fetch_many() did not populate every requested result.")
@@ -310,4 +375,7 @@ class DataContext:
     ) -> "CacheManifest":
         """Warm cache for a dataset via the resolved adapter."""
         adapter = self._resolve_source(dataset, source)
+        contract = self._declared_contract(adapter, dataset)
+        if contract is not None and not contract.supports_prefetch:
+            raise UnsupportedOperationError(f"{adapter.source_name} does not support prefetch")
         return adapter.prefetch(dataset, asof_range=asof_range)

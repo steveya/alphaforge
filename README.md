@@ -79,6 +79,21 @@ print(result.transform_id, result.rows_written)
 - `build_dataset`: materialize, align, join, and return a dataset artifact
 - `PITAccessor`: snapshot and revision-timeline access to revised series
 
+## Adapter Result Contracts
+
+Adapters can implement `describe(dataset)` to return a `DatasetContract`.
+`DataContext` then validates supported query semantics, returned schema,
+entity and observation bounds, and availability metadata at the fetch boundary.
+Custom adapters without a descriptor retain the compatibility path.
+
+`FetchResult` distinguishes observations, revision rows, and selected snapshots.
+A selected snapshot requires a known `snapshot_asof`; its rows cannot be
+available after that cutoff even when the query omits `asof`. Date-precision
+snapshots are checked by UTC day. A selected snapshot is not a complete revision
+history. Unsupported optional operations on `SourceAdapterBase`, such as
+prefetch, raise `UnsupportedOperationError` rather than returning an empty
+success result.
+
 ## Development
 
 - Tests: `pytest`

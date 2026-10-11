@@ -36,3 +36,9 @@ class Query:
         object.__setattr__(self, "start", _ts_utc(self.start))
         object.__setattr__(self, "end", _ts_utc(self.end))
         object.__setattr__(self, "asof", _ts_utc(self.asof))
+        for name in ("start", "end", "asof"):
+            value = getattr(self, name)
+            if value is not None and pd.isna(value):
+                raise ValueError(f"{name} cannot be NaT")
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError("start must be less than or equal to end")

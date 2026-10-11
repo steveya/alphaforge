@@ -16,6 +16,30 @@ compatibility boundary while older loaders migrate.
 
 ::: alphaforge.data.adapter
 
+## Declared Contracts
+
+An adapter's `describe(dataset)` returns a `DatasetContract` when it implements
+declared guarantees. `DataContext` validates query support, result schemas
+(including empty results), entity and observation bounds, and availability
+metadata on both single and batch fetches. Named registrations let distinct
+instances of one provider be selected without conflating their identities.
+
+Selected snapshots must declare `snapshot_asof` and cannot contain rows
+available after it, even if the query omits `asof`. Date-precision snapshots
+use UTC-day comparisons in both result validation and timeseries extraction;
+timestamp-precision snapshots retain exact cutoffs. A selected snapshot does
+not imply complete revision history.
+
+Legacy built-in adapters retain their existing no-policy fetch behavior and
+reject explicit `FetchPolicy` requests with `UnsupportedOperationError` until
+they implement policy semantics. Legacy adapters without descriptors do not
+claim declared query or temporal guarantees. Unsupported optional base
+operations, including prefetch, also raise `UnsupportedOperationError`.
+Partial fetch results require an explicit policy with `allow_partial=True`
+at the `DataContext` boundary.
+
+::: alphaforge.data.contracts
+
 ## Value Types
 
 ::: alphaforge.data.types

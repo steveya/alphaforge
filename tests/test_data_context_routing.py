@@ -273,9 +273,9 @@ class TestContextRouting:
         assert fred.fetch_many_calls[0][1] == threshold
 
     def test_prefetch_delegates(self, ctx, cftc):
-        manifest = ctx.prefetch("cot.tff")
-        assert manifest.source == "cftc"
-        assert manifest.dataset == "cot.tff"
+        # The fake inherits the unsupported default; routing must preserve it.
+        with pytest.raises(NotImplementedError, match="prefetch"):
+            ctx.prefetch("cot.tff")
 
 
 # ---------------------------------------------------------------------------

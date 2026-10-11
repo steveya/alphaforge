@@ -15,6 +15,7 @@ import pandas as pd
 
 from ..adapter import SourceAdapterBase
 from ..cache_layer import CacheLayer
+from ..contracts import FetchPolicy, UnsupportedOperationError
 from ..public_web.dtcc_ppd import DTCCPPDSource
 from ..query import Query
 from ..source import DataSource
@@ -116,8 +117,11 @@ class DTCCPPDAdapterBase(SourceAdapterBase):
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         """Fetch DTCC data through the canonical adapter contract."""
+        if policy is not None:
+            raise UnsupportedOperationError(f"{self.source_name} does not support fetch policy")
         dataset = query.table
         self._require_dataset(dataset)
         entities = list(query.entities or [])

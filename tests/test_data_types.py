@@ -254,3 +254,119 @@ class TestStaleDataWarning:
         w = StaleDataWarning("cache age: 3h, threshold: 1h")
         assert "3h" in str(w)
         assert "threshold" in str(w)
+
+
+@pytest.mark.parametrize("timezone_name", [None, "UTC", "America/New_York"])
+def test_timeseries_normalizes_release_timezone(timezone_name):
+    from alphaforge.data.types import FetchResult
+
+    releases = pd.to_datetime(["2025-01-02T15:00Z", "2025-01-03T15:00Z"])
+    releases = releases.tz_convert(timezone_name) if timezone_name else releases.tz_localize(None)
+    df = pd.DataFrame({
+        "obs_date": pd.to_datetime(["2025-01-01"] * 2),
+        "asof_utc": releases,
+        "value": [1.0, 2.0],
+    })
+    result = FetchResult(df, "test", "test", True, None)
+    assert result.as_timeseries(asof=date(2025, 1, 3)).iloc[0] == 1.0
+    assert result.as_timeseries(asof=pd.Timestamp("2025-01-03T10:00-05:00")).iloc[0] == 2.0
+
+
+def test_timeseries_preserves_latest_null_revision():
+    from alphaforge.data.types import FetchResult
+
+    df = pd.DataFrame({
+        "obs_date": pd.to_datetime(["2025-01-01"] * 2),
+        "asof_utc": pd.to_datetime(["2025-01-02", "2025-01-03"]),
+        "value": [1.0, float("nan")],
+    })
+    result = FetchResult(df, "test", "test", True, None)
+    assert result.as_timeseries(asof=date(2025, 1, 2)).iloc[0] == 1.0
+    assert pd.isna(result.as_timeseries().iloc[0])
+
+
+def test_timeseries_requires_entity_for_multi_series_results():
+    from alphaforge.data.types import FetchResult
+
+    df = pd.DataFrame({
+        "series_key": ["A", "B"], "obs_date": pd.to_datetime(["2025-01-01"] * 2),
+        "asof_utc": pd.to_datetime(["2025-01-02"] * 2, utc=True), "value": [1.0, 20.0],
+    })
+    result = FetchResult(df, "test", "test", True, None)
+    with pytest.raises(ValueError, match="entity"):
+        result.as_timeseries()
+    assert result.as_timeseries(entity="A").tolist() == [1.0]
+    assert result.as_timeseries(entity="B").tolist() == [20.0]
+
+
+def test_timeseries_supports_an_explicit_market_value_column():
+    from alphaforge.data.types import FetchResult
+
+    df = pd.DataFrame({"series_key": ["SPY"], "obs_date": [date(2025, 1, 1)],
+                       "close": [100.0], "volume": [200.0]})
+    result = FetchResult(df, "market", "ohlcv", False, None)
+    assert result.as_timeseries(value_column="close").tolist() == [100.0]
+    with pytest.raises(ValueError, match="value"):
+        result.as_timeseries()
+
+
+def test_snapshot_cannot_reconstruct_an_earlier_vintage():
+    from alphaforge.data.types import FetchResult
+
+    df = pd.DataFrame({"obs_date": [date(2025, 1, 1)],
+                       "asof_utc": [pd.Timestamp("2025-02-01", tz="UTC")], "value": [2.0]})
+    result = FetchResult(df, "fred", "macro.fred", True, None, result_kind="snapshot",
+                         availability_precision="date", availability_basis="snapshot",
+                         snapshot_asof=pd.Timestamp("2025-02-01", tz="UTC"))
+    with pytest.raises(ValueError, match="snapshot"):
+        result.as_timeseries(asof=date(2025, 1, 15))
+    assert result.as_timeseries(asof=date(2025, 2, 1)).tolist() == [2.0]
+
+
+def test_partial_and_mixed_cache_results_expose_each_acquisition():
+    from alphaforge.data.types import AcquisitionMetadata, FetchFailure, FetchResult
+
+    oldest = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    newest = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    acquisitions = (AcquisitionMetadata(entity="A", cached_at=oldest),
+                    AcquisitionMetadata(entity="B", cached_at=newest),
+                    AcquisitionMetadata(entity="C"))
+    result = FetchResult(pd.DataFrame(), "test", "test", True, newest,
+                         requested_entities=("A", "B", "C", "D"), acquisitions=acquisitions,
+                         failures=(FetchFailure(entity="D", message="unavailable", error_type="Timeout"),))
+    assert result.complete is False
+    assert result.cached_at == oldest
+    assert result.acquisitions[2].cached_at is None
+    assert result.failures[0].entity == "D"
+
+
+def test_legacy_pit_flag_does_not_claim_a_revision_history():
+    from alphaforge.data.types import FetchResult
+
+    result = FetchResult(pd.DataFrame(), "test", "test", True, None)
+    assert result.result_kind is None
+    assert result.availability_basis == "none"
+    assert result.complete is True
+
+
+def test_explicit_observations_do_not_claim_historical_availability():
+    from alphaforge.data.types import FetchResult
+
+    result = FetchResult(pd.DataFrame({"obs_date": [date(2025, 1, 1)], "value": [1.0]}),
+                         "test", "test", False, None, result_kind="observations")
+    with pytest.raises(ValueError, match="asof"):
+        result.as_timeseries(asof=date(2025, 1, 2))
+
+
+def test_selected_snapshot_rejects_later_cutoff_but_accepts_same_day():
+    from alphaforge.data.types import FetchResult
+
+    result = FetchResult(
+        pd.DataFrame({"obs_date": pd.to_datetime(["2025-01-01"]),
+                      "asof_utc": pd.to_datetime(["2025-02-01T18:00Z"], utc=True), "value": [2.0]}),
+        "fred", "macro.fred", True, None, result_kind="snapshot",
+        availability_precision="date", snapshot_asof=pd.Timestamp("2025-02-01", tz="UTC"),
+    )
+    with pytest.raises(ValueError, match="snapshot"):
+        result.as_timeseries(asof=date(2025, 3, 1))
+    assert result.as_timeseries(asof=pd.Timestamp("2025-02-01T15:00Z")).tolist() == [2.0]

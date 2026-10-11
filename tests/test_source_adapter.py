@@ -9,8 +9,15 @@ from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
+import pytest
 
 from alphaforge.data.query import Query
+from alphaforge.data.sources.cftc import CFTCAdapter
+from alphaforge.data.sources.dtcc import DTCCAdapter
+from alphaforge.data.sources.fred import FREDSourceAdapter
+from alphaforge.data.sources.tiingo import TiingoAdapter
+from alphaforge.futures.adapter import FirstRateFuturesAdapter
+from alphaforge.futures.raw_bars import FirstRateBarsAdapter
 
 # ---------------------------------------------------------------------------
 # Helpers – a minimal concrete adapter for testing
@@ -162,21 +169,18 @@ class TestSourceAdapterBaseFetchMany:
 
 
 class TestSourceAdapterBasePrefetch:
-    def test_default_prefetch_returns_empty_manifest(self):
+    def test_default_prefetch_is_explicitly_unsupported(self):
         adapter = _make_concrete_adapter()
-        manifest = adapter.prefetch("test.dataset")
-        assert manifest.row_count == 0
-        assert manifest.entity_keys == []
-        assert manifest.source == "fake"
-        assert manifest.dataset == "test.dataset"
+        with pytest.raises(NotImplementedError, match="prefetch"):
+            adapter.prefetch("test.dataset")
 
     def test_default_prefetch_with_asof_range(self):
         adapter = _make_concrete_adapter()
-        manifest = adapter.prefetch(
-            "test.dataset",
-            asof_range=(date(2025, 1, 1), date(2025, 3, 31)),
-        )
-        assert manifest.row_count == 0
+        with pytest.raises(NotImplementedError, match="prefetch"):
+            adapter.prefetch(
+                "test.dataset",
+                asof_range=(date(2025, 1, 1), date(2025, 3, 31)),
+            )
 
 
 class TestSourceAdapterBaseListEntities:
@@ -184,3 +188,25 @@ class TestSourceAdapterBaseListEntities:
         adapter = _make_concrete_adapter()
         entities = adapter.list_entities("test.dataset")
         assert entities == ["entity_a", "entity_b", "entity_c"]
+
+
+@pytest.mark.parametrize("operation", ["fetch", "fetch_many"])
+@pytest.mark.parametrize(
+    "adapter_class",
+    [
+        FREDSourceAdapter,
+        TiingoAdapter,
+        CFTCAdapter,
+        DTCCAdapter,
+        FirstRateFuturesAdapter,
+        FirstRateBarsAdapter,
+    ],
+)
+def test_legacy_adapter_explicit_policy_is_unsupported(adapter_class, operation):
+    from alphaforge.data.contracts import FetchPolicy, UnsupportedOperationError
+
+    adapter = object.__new__(adapter_class)
+    query = Query(table="macro.fred", columns=["value"])
+    request = query if operation == "fetch" else [query]
+    with pytest.raises(UnsupportedOperationError, match="policy"):
+        getattr(adapter, operation)(request, policy=FetchPolicy())
