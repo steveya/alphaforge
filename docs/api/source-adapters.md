@@ -24,10 +24,18 @@ declared guarantees. `DataContext` validates query support, result schemas
 metadata on both single and batch fetches. Named registrations let distinct
 instances of one provider be selected without conflating their identities.
 
+`SourceAdapter` retains the legacy structural method set; `describe` is an
+optional capability, not a requirement for runtime protocol conformance.
+`PolicyAwareSourceAdapter` types calls that explicitly pass policies.
+Declared results must contain exactly the requested projection plus identity
+columns; an empty column selection requests the full declared schema.
+Availability-aware identity columns include `asof_utc` even when the descriptor
+does not list it as a data column.
+
 Selected snapshots must declare `snapshot_asof` and cannot contain rows
 available after it, even if the query omits `asof`. Date-precision snapshots
-use UTC-day comparisons in both result validation and timeseries extraction;
-timestamp-precision snapshots retain exact cutoffs. A selected snapshot does
+and revisions use UTC-day comparisons in both result validation and timeseries
+extraction; timestamp precision retains exact cutoffs. A selected snapshot does
 not imply complete revision history.
 
 Legacy built-in adapters retain their existing no-policy fetch behavior and

@@ -90,8 +90,15 @@ class DatasetContract:
     supports_prefetch: bool = False
     entity_discovery: Literal["none", "cached", "catalog"] = "none"
 
+    @property
+    def _identity_columns(self) -> frozenset[str]:
+        columns = frozenset({"series_key", "obs_date"})
+        if self.result_kind in {"snapshot", "revisions"}:
+            columns = columns | {"asof_utc"}
+        return columns
+
     def validate_query(self, query: Query) -> None:
-        unknown = set(query.columns) - self.columns - {"series_key", "obs_date"}
+        unknown = set(query.columns) - self.columns - self._identity_columns
         if unknown:
             raise UnsupportedQueryError(f"{query.table}: unsupported columns {sorted(unknown)}")
         if query.asof is not None and not self.supports_asof:
@@ -126,17 +133,17 @@ class DatasetContract:
                     selected, requested = selected.normalize(), requested.normalize()
                 if selected != requested:
                     raise ValueError("Selected snapshot does not match the requested asof")
-        required = {"series_key", "obs_date", *(query.columns or self.columns)}
-        if result.is_pit:
-            required.add("asof_utc")
+        required = self._identity_columns | set(query.columns or self.columns)
         missing = required - set(result.data.columns)
         if missing:
             raise ValueError(f"Adapter result is missing columns {sorted(missing)}")
+        unexpected = set(result.data.columns) - required
+        if unexpected:
+            raise ValueError(f"Adapter result contains unrequested columns {sorted(unexpected)}")
         if result.data.empty:
             return
         frame = result.data
-        identity = ["series_key", "obs_date"] + (["asof_utc"] if result.is_pit else [])
-        if frame[identity].isna().any().any():
+        if frame[sorted(self._identity_columns)].isna().any().any():
             raise ValueError("Adapter result contains missing observation identities")
         if query.entities is not None and not frame["series_key"].isin(query.entities).all():
             raise ValueError("Adapter result contains unrequested entities")
@@ -153,5 +160,9 @@ class DatasetContract:
                 raise ValueError("Adapter result exceeds the selected snapshot cutoff")
         if query.asof is not None and snapshot_cutoff is None:
             available = pd.to_datetime(frame["asof_utc"], utc=True)
-            if (available > query.asof).any():
+            requested = query.asof
+            if self.availability_precision == "date":
+                available = available.dt.normalize()
+                requested = requested.normalize()
+            if (available > requested).any():
                 raise ValueError("Adapter result exceeds the asof cutoff")

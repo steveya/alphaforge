@@ -32,16 +32,11 @@ class SourceAdapter(Protocol):
     source_name: str
     datasets: frozenset[str]
 
-    def describe(self, dataset: str) -> DatasetContract:
-        """Declare the schema, query support and temporal guarantees."""
-        ...
-
     def fetch(
         self,
         query: Query,
         *,
         max_staleness: Optional[timedelta] = None,
-        policy: FetchPolicy | None = None,
     ) -> FetchResult:
         """Cache-aware single query fetch.
 
@@ -56,7 +51,6 @@ class SourceAdapter(Protocol):
         queries: list[Query],
         *,
         max_staleness: Optional[timedelta] = None,
-        policy: FetchPolicy | None = None,
     ) -> list[FetchResult]:
         """Batch fetch for multiple queries.
 
@@ -79,6 +73,28 @@ class SourceAdapter(Protocol):
 
     def list_entities(self, dataset: str) -> list[str]:
         """Return available entity/series keys for a dataset."""
+        ...
+
+
+class PolicyAwareSourceAdapter(SourceAdapter, Protocol):
+    """Adapter capability for callers that explicitly supply fetch policies."""
+
+    def fetch(
+        self,
+        query: Query,
+        *,
+        max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
+    ) -> FetchResult:
+        ...
+
+    def fetch_many(
+        self,
+        queries: list[Query],
+        *,
+        max_staleness: Optional[timedelta] = None,
+        policy: FetchPolicy | None = None,
+    ) -> list[FetchResult]:
         ...
 
 

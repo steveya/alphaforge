@@ -210,3 +210,24 @@ def test_legacy_adapter_explicit_policy_is_unsupported(adapter_class, operation)
     request = query if operation == "fetch" else [query]
     with pytest.raises(UnsupportedOperationError, match="policy"):
         getattr(adapter, operation)(request, policy=FetchPolicy())
+
+
+def test_descriptor_free_structural_adapter_retains_protocol_and_context_compatibility():
+    from alphaforge.data.adapter import SourceAdapter
+    from alphaforge.data.context import DataContext
+
+    delegate = _make_concrete_adapter()
+
+    class LegacyAdapter:
+        source_name = delegate.source_name
+        datasets = delegate.datasets
+        fetch = delegate.fetch
+        fetch_many = delegate.fetch_many
+        prefetch = delegate.prefetch
+        list_entities = delegate.list_entities
+
+    adapter = LegacyAdapter()
+    assert not hasattr(adapter, "describe")
+    assert isinstance(adapter, SourceAdapter)
+    result = DataContext.from_adapters(adapter).load("test.dataset", columns=["value"])
+    assert result.data["value"].tolist() == [1.0, 2.0]

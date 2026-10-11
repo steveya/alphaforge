@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence, cast
 
 import pandas as pd
 
@@ -10,7 +10,7 @@ from ..pit.accessor import PITAccessor
 from ..store.duckdb_parquet import DuckDBParquetStore
 from ..store.store import Store
 from ..time.calendar import TradingCalendar
-from .adapter import SourceAdapterBase
+from .adapter import PolicyAwareSourceAdapter, SourceAdapterBase
 from .contracts import DatasetContract, FetchPolicy, UnsupportedOperationError, resolve_fetch_policy
 from .panel import PanelFrame
 from .query import Query, VintageMode
@@ -250,7 +250,9 @@ class DataContext:
         if policy is None:
             result = adapter.fetch(query, max_staleness=max_staleness)
         else:
-            result = adapter.fetch(query, max_staleness=max_staleness, policy=policy)
+            result = cast(PolicyAwareSourceAdapter, adapter).fetch(
+                query, max_staleness=max_staleness, policy=policy,
+            )
         if contract is not None:
             contract.validate_result(query, result)
         if not result.complete and (policy is None or not policy.allow_partial):
@@ -344,7 +346,7 @@ class DataContext:
             if policy is None:
                 batch_results = adapter.fetch_many(batch_queries, max_staleness=max_staleness)
             else:
-                batch_results = adapter.fetch_many(
+                batch_results = cast(PolicyAwareSourceAdapter, adapter).fetch_many(
                     batch_queries, max_staleness=max_staleness, policy=policy,
                 )
             if len(batch_results) != len(batch_queries):

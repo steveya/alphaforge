@@ -166,7 +166,7 @@ class FetchResult:
             if asof is not None:
                 asof_ts = pd.to_datetime(asof, utc=True)
                 available = df["asof_utc"]
-                if self.result_kind == "snapshot" and self.availability_precision == "date":
+                if self.availability_precision == "date":
                     available = available.dt.normalize()
                     asof_ts = asof_ts.normalize()
                 df = df[available <= asof_ts]

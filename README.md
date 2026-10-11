@@ -89,7 +89,7 @@ Custom adapters without a descriptor retain the compatibility path.
 `FetchResult` distinguishes observations, revision rows, and selected snapshots.
 A selected snapshot requires a known `snapshot_asof`; its rows cannot be
 available after that cutoff even when the query omits `asof`. Date-precision
-snapshots are checked by UTC day. A selected snapshot is not a complete revision
+snapshots and revisions are checked by UTC day. A selected snapshot is not a complete revision
 history. Unsupported optional operations on `SourceAdapterBase`, such as
 prefetch, raise `UnsupportedOperationError` rather than returning an empty
 success result.

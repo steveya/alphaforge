@@ -18,9 +18,18 @@ sources, whether they serve PIT macro data, market OHLCV, or bulk positioning
 data. Key components:
 
 - **`SourceAdapter`** — protocol that every adapter implements (`fetch`, `prefetch`, `list_entities`)
-- **`SourceAdapterBase`** — mixin with default `fetch_many` (iterates) and `prefetch` (no-op)
+- **`SourceAdapterBase`** — mixin with default `fetch_many` (iterates); unsupported `prefetch` raises `UnsupportedOperationError`
 - **`CacheLayer`** — DuckDB-backed cache with separate PIT and market observation tables
 - **`FetchResult`** — unified return type with `data`, `source`, `dataset`, `is_pit`, `cached_at`
+
+Dataset descriptors are optional for legacy adapters. Adapters that implement
+`describe(dataset)` opt into query and result validation; their returned frames
+must contain exactly the requested columns plus observation identity columns.
+Empty column selections request the entire declared schema. Availability-aware
+identities include `asof_utc`, even when it is not listed as a data column.
+Date-precision snapshots and revisions use UTC-day cutoffs; timestamp precision
+retains exact cutoffs. See the [source-adapter API](../api/source-adapters.md)
+for the explicit policy and partial-result support boundary.
 
 ### Registering adapters
 

@@ -283,3 +283,43 @@ def test_context_requires_explicit_partial_result_permission(batch, policy):
         assert not result.complete
         assert result.failures[0].entity == "B"
         assert result.adapter_name == "provider"
+
+
+@pytest.mark.parametrize("precision", ["date", "timestamp"])
+def test_revision_cutoff_respects_availability_precision(precision):
+    contract = DatasetContract(
+        columns=frozenset({"value"}), result_kind="revisions",
+        availability_precision=precision, availability_basis="release", supports_asof=True,
+    )
+    result = FetchResult(
+        pd.DataFrame({"series_key": ["GDP"], "obs_date": [pd.Timestamp("2024-10-01")],
+                      "asof_utc": [pd.Timestamp("2025-01-03T15:00Z")], "value": [1.0]}),
+        "fred", "macro.fred", True, None, result_kind="revisions",
+        availability_precision=precision, availability_basis="release",
+    )
+    query = Query("macro.fred", ["value"], asof="2025-01-03")
+    if precision == "date":
+        contract.validate_result(query, result)
+        assert result.as_timeseries(asof=query.asof).tolist() == [1.0]
+    else:
+        with pytest.raises(ValueError, match="asof cutoff"):
+            contract.validate_result(query, result)
+        assert result.as_timeseries(asof=query.asof).empty
+
+
+@pytest.mark.parametrize("result_kind", ["snapshot", "revisions"])
+def test_availability_identity_column_is_queryable_without_explicit_declaration(result_kind):
+    contract = DatasetContract(columns=frozenset({"value"}), result_kind=result_kind)
+    contract.validate_query(Query("macro.fred", ["value", "asof_utc"]))
+
+
+@pytest.mark.parametrize("extra_column", ["open", "undeclared"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_contract_rejects_columns_outside_requested_projection(extra_column, empty):
+    contract = DatasetContract(columns=frozenset({"close", "open"}), result_kind="observations")
+    frame = pd.DataFrame({"series_key": ["A"], "obs_date": [pd.Timestamp("2025-01-01")],
+                          "close": [1.0], extra_column: [2.0]})
+    result = FetchResult(frame.iloc[:0] if empty else frame, "provider", "market.ohlcv",
+                         False, None, result_kind="observations")
+    with pytest.raises(ValueError, match="columns"):
+        contract.validate_result(Query("market.ohlcv", ["close"]), result)
